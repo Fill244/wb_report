@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Товары</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-10">
+    <div class="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-3xl font-semibold">Товары</h1>
+        <p class="mt-2 text-slate-600">Создавайте и редактируйте товары с артикулами, размерами и себестоимостью.</p>
+      </div>
+      <div class="flex flex-wrap gap-3">
+        <a href="/" class="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm text-slate-900 transition hover:border-indigo-500 hover:text-indigo-700">Назад к загрузке</a>
+        <a href="/products/add/" class="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">Добавить товар</a>
+      </div>
+    </div>
+
+    <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-200/80">
+      {% if products %}
+      <table class="min-w-full border-separate border-spacing-0">
+        <thead>
+          <tr class="text-left text-sm uppercase tracking-[0.24em] text-slate-500">
+            <th class="px-4 py-3">Артикул</th>
+            <th class="px-4 py-3">Размеров</th>
+            <th class="px-4 py-3">Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for product in products %}
+          <tr class="border-t border-slate-200 hover:bg-slate-100">
+            <td class="px-4 py-3 text-slate-900">{{ product.sku }}</td>
+            <td class="px-4 py-3 text-slate-900">{{ product.variants.count }}</td>
+            <td class="px-4 py-3 flex flex-wrap gap-2">
+              <a href="/products/{{ product.pk }}/view/" class="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500">Смотреть</a>
+              <a href="/products/{{ product.pk }}/edit/" class="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500">Редактировать</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="rounded-3xl border border-slate-200 bg-slate-50 p-8 text-slate-600">
+        Список товаров пуст. <a href="/products/add/" class="text-indigo-600 hover:text-indigo-800">Добавьте первый товар</a>.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

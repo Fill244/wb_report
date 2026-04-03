@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    input[name$="-DELETE"] {
+      display: none !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div class="max-w-4xl mx-auto px-4 py-10">
+    <div class="mb-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/80">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 class="text-3xl font-semibold">{{ title }}</h1>
+          <p class="mt-2 text-slate-600">Укажите артикул, размер и себестоимость товара.</p>
+        </div>
+        <a href="/products/" class="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm text-slate-900 transition hover:border-indigo-500 hover:text-indigo-700">Назад к товарам</a>
+      </div>
+
+      <form method="post" class="mt-8 grid gap-6">
+        {% csrf_token %}
+        <div>
+          <label class="text-slate-700">Артикул</label>
+          {{ form.sku }}
+        </div>
+
+        <div class="rounded-3xl border border-slate-200 bg-slate-50 p-6">
+          <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p class="text-sm uppercase tracking-[0.3em] text-indigo-600">Варианты размера</p>
+              <h2 class="mt-2 text-xl font-semibold text-slate-900">Добавьте размеры и себестоимость</h2>
+              <p class="mt-2 text-sm text-slate-600">Цена будет браться из файла Excel. Можно добавить любое количество размеров.</p>
+            </div>
+            <button id="addVariant" type="button" class="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">Добавить размер</button>
+          </div>
+          {{ formset.management_form }}
+          <div id="variants" class="space-y-4">
+            {% for variant_form in formset.forms %}
+            <div class="variant-row grid gap-4 sm:grid-cols-3 items-end rounded-3xl border border-slate-200 bg-white p-4">
+              {{ variant_form.id }}
+              {{ variant_form.product }}
+              <div>
+                <label class="text-slate-700">Размер</label>
+                {{ variant_form.size }}
+              </div>
+              <div>
+                <label class="text-slate-700">Себестоимость</label>
+                {{ variant_form.cost }}
+              </div>
+              <div class="sm:col-span-3 flex items-center justify-between gap-4">
+                {{ variant_form.DELETE }}
+                <button type="button" class="removeVariant rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500">Удалить</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          <div id="emptyForm" class="hidden">
+            <div class="variant-row grid gap-4 sm:grid-cols-3 items-end rounded-3xl border border-slate-200 bg-white p-4">
+              {{ formset.empty_form.id }}
+              {{ formset.empty_form.product }}
+              <div>
+                <label class="text-slate-700">Размер</label>
+                {{ formset.empty_form.size }}
+              </div>
+              <div>
+                <label class="text-slate-700">Себестоимость</label>
+                {{ formset.empty_form.cost }}
+              </div>
+              <div class="sm:col-span-3 flex items-center justify-between gap-4">
+                {{ formset.empty_form.DELETE }}
+                <button type="button" class="removeVariant rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500">Удалить</button>
+              </div>
+            </div>
+          </div>
+          <script>
+            document.addEventListener('DOMContentLoaded', function () {
+              const addButton = document.getElementById('addVariant');
+              const variantsContainer = document.getElementById('variants');
+              const emptyForm = document.getElementById('emptyForm').innerHTML;
+              const totalForms = document.querySelector('input[name$="-TOTAL_FORMS"]');
+
+              function updateRemoveButtons() {
+                variantsContainer.querySelectorAll('.removeVariant').forEach(button => {
+                  button.removeEventListener('click', handleRemove);
+                  button.addEventListener('click', handleRemove);
+                });
+              }
+
+              function handleRemove(event) {
+                const row = event.target.closest('.variant-row');
+                if (!row) return;
+                const deleteInput = row.querySelector('input[name$="-DELETE"]');
+                if (deleteInput) {
+                  if (deleteInput.type === 'checkbox') {
+                    deleteInput.checked = true;
+                    row.style.display = 'none';
+                  } else {
+                    row.remove();
+                    totalForms.value = parseInt(totalForms.value, 10) - 1;
+                  }
+                } else {
+                  row.remove();
+                  totalForms.value = parseInt(totalForms.value, 10) - 1;
+                }
+              }
+
+              addButton.addEventListener('click', function () {
+                const index = parseInt(totalForms.value, 10);
+                const newFormHtml = emptyForm.replace(/__prefix__/g, index);
+                variantsContainer.insertAdjacentHTML('beforeend', newFormHtml);
+                totalForms.value = index + 1;
+                updateRemoveButtons();
+              });
+
+              updateRemoveButtons();
+            });
+          </script>
+        </div>
+
+        <div class="flex flex-wrap gap-3 pt-2">
+          <button type="submit" class="rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">Сохранить</button>
+          <a href="/products/" class="rounded-2xl border border-slate-300 bg-white px-6 py-3 text-sm text-slate-900 transition hover:border-indigo-500 hover:text-indigo-700">Отмена</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

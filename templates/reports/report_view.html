@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WB Analytics - Просмотр отчета</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gradient-to-br from-slate-50 to-slate-100 text-slate-900 min-h-screen">
+  <div class="max-w-7xl mx-auto px-4 py-10">
+
+    <!-- HEADER -->
+    <div class="mb-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h1 class="text-3xl font-bold">WB Analytics</h1>
+        <p class="mt-1 text-slate-500">{{ report.title }}</p>
+      </div>
+
+      <div class="flex flex-wrap gap-3">
+        <a href="/products/" class="px-5 py-2 rounded-xl bg-white shadow-sm border border-slate-200 hover:shadow-md hover:border-slate-300 transition text-sm font-medium">
+          Товары
+        </a>
+        <a href="/report/history/" class="px-5 py-2 rounded-xl bg-white shadow-sm border border-slate-200 hover:shadow-md hover:border-slate-300 transition text-sm font-medium">
+          История
+        </a>
+      </div>
+    </div>
+
+    <!-- RESULTS -->
+    <div id="results" class="grid gap-6"></div>
+
+    <!-- DETAILS TABLE -->
+    <div id="detailsSection" class="mt-8 rounded-3xl bg-white p-6 shadow-lg border border-slate-200 hidden">
+      <h2 class="text-2xl font-semibold mb-4">Детализация операций</h2>
+
+      <!-- Filters -->
+      <div class="mb-6 grid gap-4 md:grid-cols-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Поиск по артикулу</label>
+          <input id="searchInput" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200" placeholder="Введите артикул..." />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Партнер</label>
+          <select id="partnerFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="a">A</option>
+            <option value="b">B</option>
+            <option value="c">C</option>
+            <option value="d">D</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Тип</label>
+          <select id="typeFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="продажа">Продажа</option>
+            <option value="возврат">Возврат</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Прибыль</label>
+          <select id="profitFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="positive">Прибыльные (>0)</option>
+            <option value="negative">Убыточные (<0)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Row Count -->
+      <div class="mb-4 text-sm text-slate-600">
+        Показано строк: <span id="rowCount">0</span>
+      </div>
+
+      <!-- Table -->
+      <div class="overflow-y-auto max-h-96 border border-slate-200 rounded-lg">
+        <table class="min-w-full divide-y divide-slate-200">
+          <thead class="bg-slate-50 sticky top-0">
+            <tr>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Артикул</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Партнер</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Тип</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="sale_amount">Продажи</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="wb_amount">WB</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="delivery">Доставка</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="fines">Штрафы</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="deductions">Удержания</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="cost">Себестоимость</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="profit">Прибыль</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody" class="bg-white divide-y divide-slate-200">
+            <!-- Rows will be inserted here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const resultsNode = document.getElementById('results');
+    let originalDetails = [];
+    let filteredDetails = [];
+    let sortState = { key: null, direction: 'desc' };
+
+    const reportData = {{ report_json|safe }};
+
+    const formatMoney = (value) => {
+      const num = Number(value || 0);
+      return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(num);
+    };
+
+    function stat(title, value) {
+      return `
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <p class="text-sm font-semibold text-slate-700">${title}</p>
+          <p class="mt-2 text-lg font-semibold text-slate-900">${formatMoney(value)}</p>
+        </div>
+      `;
+    }
+
+    function renderOverallSummary(data) {
+      const overall = {
+        storage_amount: data.overall_storage_amount || 0,
+        receiving_amount: data.overall_receiving_amount || 0,
+      };
+
+      const section = document.createElement('section');
+      section.className = 'rounded-3xl border border-slate-200 bg-white p-6 shadow-lg';
+      section.innerHTML = `
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="text-sm uppercase tracking-[0.25em] text-indigo-600 font-semibold">Общие суммы</p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-900">Хранение и операции на приемке</h2>
+          </div>
+        </div>
+        <div class="mt-6 grid gap-4 md:grid-cols-2">
+          ${stat('Хранение (всего)', overall.storage_amount)}
+          ${stat('Операции на приемке (всего)', overall.receiving_amount)}
+        </div>
+      `;
+      return section;
+    }
+
+    function renderProductCosts(data) {
+      const missing = data.missing_products || [];
+      const section = document.createElement('section');
+      section.className = 'rounded-3xl border border-slate-200 bg-white p-6 shadow-lg';
+      section.innerHTML = `
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p class="text-sm uppercase tracking-[0.25em] text-emerald-600 font-semibold">Товары</p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-900">Себестоимость по продажам и возвратам</h2>
+          </div>
+        </div>
+
+        <div class="mt-6 grid gap-4 md:grid-cols-2">
+          ${stat('Себестоимость продаж', data.product_cost_sales)}
+          ${stat('Себестоимость возвратов', data.product_cost_returns)}
+        </div>
+
+        ${missing.length ? `
+          <div class="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <p class="font-semibold text-amber-700">Не найденные товары</p>
+            <p class="mt-2 text-sm text-slate-700 leading-6">${missing.join(', ')}</p>
+          </div>
+        ` : ''}
+      `;
+      return section;
+    }
+
+    function renderPartnerCard(partner, stats, partnerCosts) {
+      const profit =
+        (stats.sales_amount || 0)
+        - (stats.returns_amount || 0)
+        - (stats.delivery_amount || 0)
+        - (stats.commission || 0)
+        - (stats.fines_amount || 0)
+        - (stats.withholdings_amount || 0)
+        - (partnerCosts.sales || 0)
+        - (partnerCosts.returns || 0);
+
+      const profitClass = profit >= 0 ? 'text-emerald-600' : 'text-rose-600';
+
+      const card = document.createElement('article');
+      card.className = 'rounded-3xl border border-slate-200 bg-white p-6 shadow-lg';
+      card.innerHTML = `
+        <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p class="text-sm uppercase tracking-[0.25em] text-slate-500 font-semibold">Партнёр ${partner.toUpperCase()}</p>
+            <h2 class="mt-2 text-2xl font-semibold text-slate-900">Итог по партнёру ${partner.toUpperCase()}</h2>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p class="text-xs uppercase tracking-[0.2em] text-slate-500 font-semibold">Прибыль</p>
+            <p class="mt-1 text-2xl font-bold ${profitClass}">${formatMoney(profit)}</p>
+          </div>
+        </div>
+
+        <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          ${stat('Продажи', stats.sales_amount)}
+          ${stat('Возвраты', stats.returns_amount)}
+          ${stat('Комиссия', stats.commission)}
+          ${stat('Итог WB', stats.total_amount)}
+          ${stat('Доставка', stats.delivery_amount)}
+          ${stat('WB реализовал (Пр)', stats.wb_realized_amount)}
+          ${stat('Штрафы', stats.fines_amount)}
+          ${stat('Удержания', stats.withholdings_amount)}
+          ${stat('Себестоимость продаж', partnerCosts.sales)}
+          ${stat('Себестоимость возвратов', partnerCosts.returns)}
+        </div>
+      `;
+      return card;
+    }
+
+    function renderResults(data) {
+      resultsNode.innerHTML = '';
+      resultsNode.appendChild(renderOverallSummary(data));
+      resultsNode.appendChild(renderProductCosts(data));
+      renderDetailsSection(data);
+
+      const partners = data.partners || {};
+      for (const partner of ['a', 'b', 'c', 'd']) {
+        const stats = partners[partner] || {};
+        const partnerCosts = data.partner_costs ? (data.partner_costs[partner] || {}) : {};
+        resultsNode.appendChild(renderPartnerCard(partner, stats, partnerCosts));
+      }
+    }
+
+    function renderDetailsSection(data) {
+      const detailsSection = document.getElementById('detailsSection');
+      if (!detailsSection) return;
+
+      if (data.details && data.details.length > 0) {
+        originalDetails = data.details;
+        detailsSection.classList.remove('hidden');
+        bindDetailsControls();
+        const filtered = sortData(filterData());
+        renderTable(filtered);
+      } else {
+        detailsSection.classList.add('hidden');
+      }
+    }
+
+    function filterData() {
+      const searchInput = document.getElementById('searchInput');
+      const partnerSelect = document.getElementById('partnerFilter');
+      const typeSelect = document.getElementById('typeFilter');
+      const profitSelect = document.getElementById('profitFilter');
+
+      const searchValue = (searchInput ? searchInput.value : '').trim().toLowerCase();
+      const partnerValue = partnerSelect ? partnerSelect.value : '';
+      const typeValue = typeSelect ? typeSelect.value : '';
+      const profitValue = profitSelect ? profitSelect.value : '';
+
+      filteredDetails = originalDetails.filter(row => {
+        const articleMatch = !searchValue || (row.article || '').toLowerCase().includes(searchValue);
+        const partnerMatch = !partnerValue || row.partner === partnerValue;
+        const typeMatch = !typeValue || row.type === typeValue;
+        const profit = Number(row.profit || 0);
+        const profitMatch = !profitValue ||
+          (profitValue === 'positive' && profit > 0) ||
+          (profitValue === 'negative' && profit < 0);
+
+        return articleMatch && partnerMatch && typeMatch && profitMatch;
+      });
+
+      return filteredDetails;
+    }
+
+    function sortData(data) {
+      if (!sortState.key) return data;
+
+      return [...data].sort((a, b) => {
+        let aVal = a[sortState.key];
+        let bVal = b[sortState.key];
+
+        if (typeof aVal === 'string') {
+          aVal = aVal.toLowerCase();
+          bVal = bVal.toLowerCase();
+        }
+
+        if (aVal < bVal) return sortState.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortState.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    function renderTable(data) {
+      const tbody = document.getElementById('tableBody');
+      const rowCount = document.getElementById('rowCount');
+
+      if (!tbody || !rowCount) return;
+
+      rowCount.textContent = data.length;
+
+      tbody.innerHTML = data.map(row => {
+        const profitClass = (row.profit || 0) > 0 ? 'text-green-600' : (row.profit || 0) < 0 ? 'text-red-600' : 'text-slate-900';
+
+        return `
+          <tr class="hover:bg-slate-50">
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.article || ''}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${(row.partner || '').toUpperCase()}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.type || ''}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.sale_amount)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.wb_amount)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.delivery)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.fines)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.deductions)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.cost)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 font-semibold ${profitClass}">${formatMoney(row.profit)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function bindDetailsControls() {
+      const searchInput = document.getElementById('searchInput');
+      const partnerSelect = document.getElementById('partnerFilter');
+      const typeSelect = document.getElementById('typeFilter');
+      const profitSelect = document.getElementById('profitFilter');
+      const sortHeaders = document.querySelectorAll('th[data-sort]');
+
+      if (searchInput && !searchInput.dataset.bound) {
+        searchInput.addEventListener('input', () => {
+          const filtered = sortData(filterData());
+          renderTable(filtered);
+        });
+        searchInput.dataset.bound = 'true';
+      }
+
+      [partnerSelect, typeSelect, profitSelect].forEach(select => {
+        if (select && !select.dataset.bound) {
+          select.addEventListener('change', () => {
+            const filtered = sortData(filterData());
+            renderTable(filtered);
+          });
+          select.dataset.bound = 'true';
+        }
+      });
+
+      sortHeaders.forEach(header => {
+        if (header.dataset.bound) return;
+        header.addEventListener('click', () => {
+          const key = header.getAttribute('data-sort');
+          if (sortState.key === key) {
+            sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
+          } else {
+            sortState.key = key;
+            sortState.direction = 'asc';
+          }
+          const filtered = sortData(filterData());
+          renderTable(filtered);
+        });
+        header.dataset.bound = 'true';
+      });
+    }
+
+    // Load and render report data
+    if (reportData) {
+      renderResults(reportData);
+    }
+  </script>
+</body>
+</html>

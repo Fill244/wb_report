@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>История отчётов</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-10">
+    <div class="mb-8 rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-200/80">
+      <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 class="text-3xl font-semibold">История отчётов</h1>
+          <p class="mt-2 text-slate-600">Список сохранённых отчётов с датой и названием.</p>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <a href="/" class="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm text-slate-900 transition hover:border-indigo-500 hover:text-indigo-700">Назад</a>
+        </div>
+      </div>
+      {% if reports %}
+      <div class="mt-8 overflow-x-auto rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        <table class="min-w-full border-separate border-spacing-0">
+          <thead>
+            <tr class="text-left text-sm uppercase tracking-[0.24em] text-slate-500">
+              <th class="px-4 py-3">Название</th>
+              <th class="px-4 py-3">Файл</th>
+              <th class="px-4 py-3">Дата сохранения</th>
+              <th class="px-4 py-3">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for report in reports %}
+            <tr class="border-t border-slate-200 hover:bg-white">
+              <td class="px-4 py-3 text-slate-900">{{ report.title|default:'Без названия' }}</td>
+              <td class="px-4 py-3 text-slate-900">{{ report.file_name|default:'—' }}</td>
+              <td class="px-4 py-3 text-slate-900">{{ report.created_at|date:'d.m.Y H:i' }}</td>
+              <td class="px-4 py-3">
+                <div class="flex flex-wrap gap-2">
+                  <a href="/report/load/{{ report.pk }}/" class="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500">Открыть</a>
+                  <form method="post" action="/report/delete/{{ report.pk }}/" class="inline">
+                    {% csrf_token %}
+                    <button type="submit" class="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500">Удалить</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-8 text-slate-600">
+        Здесь пока нет сохранённых отчётов.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

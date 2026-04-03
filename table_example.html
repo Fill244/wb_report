@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wildberries Details Table</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div class="max-w-7xl mx-auto px-4 py-10">
+    <div class="mb-8 rounded-3xl bg-white p-6 shadow-lg border border-slate-200">
+      <h2 class="text-2xl font-semibold mb-4">Детализация операций</h2>
+
+      <!-- Filters -->
+      <div class="mb-6 grid gap-4 md:grid-cols-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Поиск по артикулу</label>
+          <input id="searchInput" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200" placeholder="Введите артикул..." />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Партнер</label>
+          <select id="partnerFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="a">A</option>
+            <option value="b">B</option>
+            <option value="c">C</option>
+            <option value="d">D</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Тип</label>
+          <select id="typeFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="продажа">Продажа</option>
+            <option value="возврат">Возврат</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Прибыль</label>
+          <select id="profitFilter" class="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200">
+            <option value="">Все</option>
+            <option value="positive">Прибыльные (>0)</option>
+            <option value="negative">Убыточные (<0)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Row Count -->
+      <div class="mb-4 text-sm text-slate-600">
+        Показано строк: <span id="rowCount">0</span>
+      </div>
+
+      <!-- Table -->
+      <div class="overflow-y-auto max-h-96 border border-slate-200 rounded-lg">
+        <table class="min-w-full divide-y divide-slate-200">
+          <thead class="bg-slate-50 sticky top-0">
+            <tr>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Артикул</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Партнер</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Тип</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="sale_amount">Продажи</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="wb_amount">WB</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="delivery">Доставка</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="fines">Штрафы</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="deductions">Удержания</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="cost">Себестоимость</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100" data-sort="profit">Прибыль</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody" class="bg-white divide-y divide-slate-200">
+            <!-- Rows will be inserted here -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Mock data - replace with actual data from backend
+    const originalData = [
+      { article: 'ART001', partner: 'a', type: 'продажа', sale_amount: 1000, wb_amount: 50, delivery: 100, fines: 0, deductions: 20, cost: 800, profit: 30 },
+      { article: 'ART002', partner: 'b', type: 'возврат', sale_amount: -500, wb_amount: -25, delivery: -50, fines: 10, deductions: 5, cost: -400, profit: -10 },
+      { article: 'ART003', partner: 'c', type: 'продажа', sale_amount: 2000, wb_amount: 100, delivery: 200, fines: 0, deductions: 40, cost: 1600, profit: 60 },
+      // Add more data as needed
+    ];
+
+    let filteredData = [...originalData];
+    let currentSort = { column: null, direction: 'asc' };
+
+    const formatMoney = (value) => {
+      return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(value);
+    };
+
+    function filterData() {
+      const search = document.getElementById('searchInput').value.toLowerCase();
+      const partner = document.getElementById('partnerFilter').value;
+      const type = document.getElementById('typeFilter').value;
+      const profit = document.getElementById('profitFilter').value;
+
+      filteredData = originalData.filter(row => {
+        if (search && !row.article.toLowerCase().includes(search)) return false;
+        if (partner && row.partner !== partner) return false;
+        if (type && row.type !== type) return false;
+        if (profit === 'positive' && row.profit <= 0) return false;
+        if (profit === 'negative' && row.profit >= 0) return false;
+        return true;
+      });
+
+      sortData();
+      renderTable();
+    }
+
+    function sortData() {
+      if (!currentSort.column) return;
+
+      filteredData.sort((a, b) => {
+        let aVal = a[currentSort.column];
+        let bVal = b[currentSort.column];
+
+        if (typeof aVal === 'string') {
+          aVal = aVal.toLowerCase();
+          bVal = bVal.toLowerCase();
+        }
+
+        if (aVal < bVal) return currentSort.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return currentSort.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById('tableBody');
+      tbody.innerHTML = '';
+
+      filteredData.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-50';
+
+        const profitClass = row.profit > 0 ? 'text-green-600' : row.profit < 0 ? 'text-red-600' : 'text-slate-900';
+
+        tr.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.article}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.partner.toUpperCase()}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.type}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.sale_amount)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.wb_amount)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.delivery)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.fines)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.deductions)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${formatMoney(row.cost)}</td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 font-semibold ${profitClass}">${formatMoney(row.profit)}</td>
+        `;
+
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('rowCount').textContent = filteredData.length;
+    }
+
+    // Event listeners
+    document.getElementById('searchInput').addEventListener('input', filterData);
+    document.getElementById('partnerFilter').addEventListener('change', filterData);
+    document.getElementById('typeFilter').addEventListener('change', filterData);
+    document.getElementById('profitFilter').addEventListener('change', filterData);
+
+    // Sort listeners
+    document.querySelectorAll('th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const column = th.getAttribute('data-sort');
+        if (currentSort.column === column) {
+          currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+          currentSort.column = column;
+          currentSort.direction = 'asc';
+        }
+        sortData();
+        renderTable();
+      });
+    });
+
+    // Initial render
+    filterData();
+  </script>
+</body>
+</html>
