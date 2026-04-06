@@ -29,6 +29,13 @@
     <!-- RESULTS -->
     <div id="results" class="grid gap-6"></div>
 
+    <!-- DETAILS TABLE TOGGLE -->
+    <div id="detailsToggleContainer" class="mt-8 hidden">
+      <button id="toggleDetailsBtn" class="inline-flex items-center justify-center rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
+        <span id="toggleDetailsBtnText">Показать таблицу</span>
+      </button>
+    </div>
+
     <!-- DETAILS TABLE -->
     <div id="detailsSection" class="mt-8 rounded-3xl bg-white p-6 shadow-lg border border-slate-200 hidden">
       <h2 class="text-2xl font-semibold mb-4">Детализация операций</h2>
@@ -228,15 +235,19 @@
 
     function renderDetailsSection(data) {
       const detailsSection = document.getElementById('detailsSection');
-      if (!detailsSection) return;
+      const toggleContainer = document.getElementById('detailsToggleContainer');
+      if (!detailsSection || !toggleContainer) return;
 
       if (data.details && data.details.length > 0) {
         originalDetails = data.details;
-        detailsSection.classList.remove('hidden');
+        toggleContainer.classList.remove('hidden');
+        // Keep table hidden by default
+        detailsSection.classList.add('hidden');
         bindDetailsControls();
         const filtered = sortData(filterData());
         renderTable(filtered);
       } else {
+        toggleContainer.classList.add('hidden');
         detailsSection.classList.add('hidden');
       }
     }
@@ -358,6 +369,23 @@
     // Load and render report data
     if (reportData) {
       renderResults(reportData);
+    }
+
+    // Toggle details table visibility
+    const toggleDetailsBtn = document.getElementById('toggleDetailsBtn');
+    const toggleDetailsBtnText = document.getElementById('toggleDetailsBtnText');
+    const detailsSection = document.getElementById('detailsSection');
+    
+    if (toggleDetailsBtn) {
+      toggleDetailsBtn.addEventListener('click', () => {
+        if (detailsSection.classList.contains('hidden')) {
+          detailsSection.classList.remove('hidden');
+          toggleDetailsBtnText.textContent = 'Скрыть таблицу';
+        } else {
+          detailsSection.classList.add('hidden');
+          toggleDetailsBtnText.textContent = 'Показать таблицу';
+        }
+      });
     }
   </script>
 </body>

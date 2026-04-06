@@ -250,6 +250,14 @@ def product_view(request, pk):
     return render(request, 'reports/product_view.html', {'product': product, 'variants': variants})
 
 
+def delete_product(request, pk):
+    if request.method != 'POST':
+        return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
+    product = get_object_or_404(Product, pk=pk)
+    product.delete()
+    return redirect('product_list')
+
+
 @csrf_exempt
 def save_report(request):
     if request.method != 'POST':

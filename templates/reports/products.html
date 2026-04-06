@@ -37,6 +37,10 @@
             <td class="px-4 py-3 flex flex-wrap gap-2">
               <a href="/products/{{ product.pk }}/view/" class="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500">Смотреть</a>
               <a href="/products/{{ product.pk }}/edit/" class="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-500">Редактировать</a>
+              <form method="post" action="/products/{{ product.pk }}/delete/" class="inline" onsubmit="return confirm('Вы уверены? Товар и все его варианты будут удалены.');">
+                {% csrf_token %}
+                <button type="submit" class="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500">Удалить</button>
+              </form>
             </td>
           </tr>
           {% endfor %}
