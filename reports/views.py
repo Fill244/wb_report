@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import traceback
 import hashlib
+from decimal import Decimal, InvalidOperation
 from django.core.cache import cache
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render, redirect, get_object_or_404
@@ -61,6 +62,96 @@ def _normalize_column_names(df):
 
 def _prepare_df(file):
     df = pd.read_excel(file, engine='openpyxl')
+    df = _normalize_column_names(df)
+    return df
+
+
+def _is_product_import_column(name):
+    normalized = _normalize_name(name)
+    article_match = 'артикул' in normalized and ('продавца' in normalized or 'поставщика' in normalized)
+    size_match = 'размер' in normalized
+    price_match = normalized == 'цена' or 'цена' in normalized
+    return article_match or size_match or price_match
+
+
+def _prepare_product_import_df(file):
+    df = pd.read_excel(
+        file,
+        engine='openpyxl',
+        usecols=lambda col_name: _is_product_import_column(col_name),
+    )
+    df = _normalize_column_names(df)
+    return df
+
+
+def _set_products_message(request, text, level='info'):
+    request.session['products_message'] = {
+        'text': text,
+        'level': level,
+    }
+
+
+def _pop_products_message(request):
+    return request.session.pop('products_message', None)
+
+
+def _find_product_import_header_row(file, sheet_name=0, max_rows=10):
+    probe_df = pd.read_excel(
+        file,
+        sheet_name=sheet_name,
+        engine='openpyxl',
+        header=None,
+        nrows=max_rows,
+    )
+
+    for row_index in range(len(probe_df.index)):
+        normalized_values = {_normalize_name(value) for value in probe_df.iloc[row_index].tolist()}
+        if (
+            ('артикул продавца' in normalized_values or 'артикул поставщика' in normalized_values)
+            and 'размер' in normalized_values
+            and 'цена' in normalized_values
+        ):
+            return row_index
+
+    raise ValueError('Не удалось определить строку заголовков в Excel-файле.')
+
+
+def _get_product_import_columns(file, sheet_name=0, max_rows=10):
+    probe_df = pd.read_excel(
+        file,
+        sheet_name=sheet_name,
+        engine='openpyxl',
+        header=None,
+        nrows=max_rows,
+    )
+    file.seek(0)
+    header_row = _find_product_import_header_row(file, sheet_name=sheet_name, max_rows=max_rows)
+    file.seek(0)
+
+    headers = probe_df.iloc[header_row].tolist()
+    column_indexes = []
+
+    for index, value in enumerate(headers):
+        normalized = _normalize_name(value)
+        if normalized in {'артикул продавца', 'артикул поставщика', 'размер', 'цена'}:
+            column_indexes.append(index)
+
+    if len(column_indexes) < 3:
+        raise ValueError('Не удалось определить колонки Артикул продавца, Размер и Цена.')
+
+    return header_row, column_indexes
+
+
+def _prepare_product_import_df(file):
+    header_row, column_indexes = _get_product_import_columns(file, sheet_name=0)
+    file.seek(0)
+    df = pd.read_excel(
+        file,
+        sheet_name=0,
+        engine='openpyxl',
+        header=header_row,
+        usecols=column_indexes,
+    )
     df = _normalize_column_names(df)
     return df
 
@@ -206,11 +297,12 @@ def _build_result(df):
         ],
     }
 
-
 def product_list(request):
     products = Product.objects.prefetch_related('variants').order_by('sku')
-    return render(request, 'reports/products.html', {'products': products})
-
+    return render(request, 'reports/products.html', {
+        'products': products,
+        'products_message': _pop_products_message(request),
+    })
 
 def product_add(request):
     if request.method == 'POST':
@@ -228,7 +320,6 @@ def product_add(request):
         formset = ProductVariantFormSet()
     return render(request, 'reports/product_form.html', {'form': form, 'formset': formset, 'title': 'Добавить товар'})
 
-
 def product_edit(request, pk):
     product = get_object_or_404(Product, pk=pk)
     if request.method == 'POST':
@@ -243,12 +334,10 @@ def product_edit(request, pk):
         formset = ProductVariantFormSet(instance=product)
     return render(request, 'reports/product_form.html', {'form': form, 'formset': formset, 'title': 'Редактировать товар'})
 
-
 def product_view(request, pk):
     product = get_object_or_404(Product.objects.prefetch_related('variants'), pk=pk)
     variants = product.variants.all().order_by('size')
     return render(request, 'reports/product_view.html', {'product': product, 'variants': variants})
-
 
 def delete_product(request, pk):
     if request.method != 'POST':
@@ -257,6 +346,85 @@ def delete_product(request, pk):
     product.delete()
     return redirect('product_list')
 
+def import_products_excel(request):
+    if request.method != 'POST':
+        return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
+
+    excel_file = request.FILES.get('file')
+    if not excel_file:
+        _set_products_message(request, 'Выберите Excel-файл для импорта.', 'error')
+        return redirect('product_list')
+
+    try:
+        df = _prepare_product_import_df(excel_file)
+
+        article_col = _find_column(df, ['артикул продавца', 'артикул поставщика'])
+        size_col = _find_column(df, ['размер'])
+        price_col = _find_column(df, ['цена'])
+
+        missing = []
+        if article_col is None:
+            missing.append('Артикул продавца')
+        if size_col is None:
+            missing.append('Размер')
+        if price_col is None:
+            missing.append('Цена')
+        if missing:
+            raise ValueError(f'В Excel не найдены обязательные колонки: {", ".join(missing)}.')
+
+        imported_rows = 0
+        created_products = 0
+        created_variants = 0
+        updated_variants = 0
+
+        for _, row in df.iterrows():
+            sku = str(row.get(article_col, '')).strip()
+            size = str(row.get(size_col, '')).strip()
+            raw_price = row.get(price_col, '')
+
+            if not sku or sku.lower() == 'nan':
+                continue
+
+            if size.lower() == 'nan':
+                size = ''
+
+            price_str = str(raw_price).strip().replace('\u00A0', '').replace(' ', '').replace(',', '.')
+            if not price_str or price_str.lower() == 'nan':
+                continue
+
+            try:
+                cost = Decimal(price_str)
+            except (InvalidOperation, TypeError):
+                continue
+
+            product, product_created = Product.objects.get_or_create(sku=sku)
+            if product_created:
+                created_products += 1
+
+            _, variant_created = ProductVariant.objects.update_or_create(
+                product=product,
+                size=size,
+                defaults={'cost': cost},
+            )
+
+            imported_rows += 1
+            if variant_created:
+                created_variants += 1
+            else:
+                updated_variants += 1
+
+        _set_products_message(
+            request,
+            f'Импорт завершён. Обработано строк: {imported_rows}. '
+            f'Новых товаров: {created_products}. '
+            f'Новых размеров: {created_variants}. '
+            f'Обновлено размеров: {updated_variants}.',
+            'success',
+        )
+    except Exception as exc:
+        _set_products_message(request, f'Ошибка импорта: {exc}', 'error')
+
+    return redirect('product_list')
 
 @csrf_exempt
 def save_report(request):
@@ -283,11 +451,9 @@ def save_report(request):
 
     return JsonResponse({'success': True, 'report_id': report.id})
 
-
 def report_history(request):
     reports = Report.objects.order_by('-created_at')
     return render(request, 'reports/history.html', {'reports': reports})
-
 
 def load_report(request, pk):
     report = get_object_or_404(Report, pk=pk)
@@ -297,7 +463,6 @@ def load_report(request, pk):
         'report_json': report_json,
     })
 
-
 def delete_report(request, pk):
     if request.method != 'POST':
         return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
@@ -305,10 +470,8 @@ def delete_report(request, pk):
     report.delete()
     return redirect('report_history')
 
-
 def upload_page(request):
     return render(request, 'reports/upload.html')
-
 
 @csrf_exempt
 def upload_file(request):

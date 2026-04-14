@@ -19,6 +19,55 @@
       </div>
     </div>
 
+    {% if products_message %}
+    <div class="mb-6 rounded-3xl border px-5 py-4 shadow-sm {% if products_message.level == 'error' %}border-rose-200 bg-rose-50 text-rose-700{% elif products_message.level == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700{% else %}border-slate-200 bg-white text-slate-700{% endif %}">
+      {{ products_message.text }}
+    </div>
+    {% endif %}
+
+    {% if products %}
+    <div class="mb-6 rounded-3xl border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/80">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <label class="block flex-1">
+          <span class="mb-2 block text-sm font-medium text-slate-700">Поиск по артикулу</span>
+          <input
+            id="productSearchInput"
+            type="text"
+            placeholder="Введите артикул"
+            class="block w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100"
+          />
+        </label>
+        <p class="text-sm font-medium text-slate-500">Найдено товаров: <span id="productSearchCount">{{ products|length }}</span></p>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="mb-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/80">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h2 class="text-xl font-semibold text-slate-900">Импорт товаров из Excel</h2>
+          <p class="mt-2 text-slate-600">Обрабатываются только три столбца: Артикул продавца, Размер и Цена. Остальные столбцы не читаются и не участвуют в обработке.</p>
+        </div>
+      </div>
+
+      <form method="post" action="/products/import/" enctype="multipart/form-data" class="mt-6 flex flex-col gap-4 lg:flex-row lg:items-end">
+        {% csrf_token %}
+        <label class="block flex-1">
+          <span class="mb-2 block text-sm font-medium text-slate-700">Excel-файл</span>
+          <input
+            type="file"
+            name="file"
+            accept=".xls,.xlsx"
+            class="block w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-slate-900 file:mr-4 file:rounded-xl file:border-0 file:bg-slate-100 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200"
+            required
+          />
+        </label>
+        <button type="submit" class="rounded-2xl bg-emerald-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-emerald-500">
+          Импортировать из Excel
+        </button>
+      </form>
+    </div>
+
     <div class="overflow-x-auto rounded-3xl border border-slate-200 bg-white p-4 shadow-xl shadow-slate-200/80">
       {% if products %}
       <table class="min-w-full border-separate border-spacing-0">
@@ -29,9 +78,9 @@
             <th class="px-4 py-3">Действия</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="productsTableBody">
           {% for product in products %}
-          <tr class="border-t border-slate-200 hover:bg-slate-100">
+          <tr class="border-t border-slate-200 hover:bg-slate-100" data-product-row data-sku="{{ product.sku|lower }}">
             <td class="px-4 py-3 text-slate-900">{{ product.sku }}</td>
             <td class="px-4 py-3 text-slate-900">{{ product.variants.count }}</td>
             <td class="px-4 py-3 flex flex-wrap gap-2">
@@ -53,5 +102,31 @@
       {% endif %}
     </div>
   </div>
+
+  {% if products %}
+  <script>
+    const productSearchInput = document.getElementById('productSearchInput');
+    const productSearchCount = document.getElementById('productSearchCount');
+    const productRows = Array.from(document.querySelectorAll('[data-product-row]'));
+
+    function filterProducts() {
+      const searchValue = (productSearchInput.value || '').trim().toLowerCase();
+      let visibleCount = 0;
+
+      productRows.forEach((row) => {
+        const sku = row.dataset.sku || '';
+        const isVisible = !searchValue || sku.includes(searchValue);
+        row.classList.toggle('hidden', !isVisible);
+        if (isVisible) {
+          visibleCount += 1;
+        }
+      });
+
+      productSearchCount.textContent = visibleCount;
+    }
+
+    productSearchInput.addEventListener('input', filterProducts);
+  </script>
+  {% endif %}
 </body>
 </html>

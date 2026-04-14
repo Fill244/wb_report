@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Вход</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 text-slate-900">
+  <div class="mx-auto flex min-h-screen max-w-6xl items-center px-4 py-10">
+    <div class="grid w-full gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+      <section class="rounded-[2rem] border border-slate-200 bg-white/80 p-8 shadow-2xl shadow-slate-200/70 backdrop-blur">
+        <p class="text-sm font-semibold uppercase tracking-[0.35em] text-indigo-600">WB Analytics</p>
+        <h1 class="mt-4 text-4xl font-bold text-slate-900">Вход в систему</h1>
+        <p class="mt-4 max-w-xl text-base leading-7 text-slate-600">
+          Авторизуйтесь, чтобы загружать Excel-отчёты Wildberries, просматривать историю и управлять товарами.
+        </p>
+        <div class="mt-8 grid gap-4 sm:grid-cols-3">
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p class="text-sm font-semibold text-slate-700">Отчёты</p>
+            <p class="mt-2 text-sm text-slate-500">Загрузка и расчёт аналитики без лишних шагов.</p>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p class="text-sm font-semibold text-slate-700">История</p>
+            <p class="mt-2 text-sm text-slate-500">Сохранённые отчёты всегда под рукой.</p>
+          </div>
+          <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p class="text-sm font-semibold text-slate-700">Товары</p>
+            <p class="mt-2 text-sm text-slate-500">Импорт себестоимости и размеров из Excel.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="rounded-[2rem] border border-slate-200 bg-white p-8 shadow-2xl shadow-slate-200/70">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <h2 class="text-2xl font-semibold text-slate-900">Войти</h2>
+            <p class="mt-2 text-sm text-slate-500">Введите логин и пароль.</p>
+          </div>
+          <a href="/register/" class="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-indigo-500 hover:text-indigo-700">Регистрация</a>
+        </div>
+
+        {% if messages %}
+          {% for message in messages %}
+          <div class="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            {{ message }}
+          </div>
+          {% endfor %}
+        {% endif %}
+
+        {% if form.non_field_errors %}
+        <div class="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          {{ form.non_field_errors }}
+        </div>
+        {% endif %}
+
+        <form method="post" class="mt-6 grid gap-5">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ next|default:'' }}" />
+
+          <div>
+            <label for="{{ form.username.id_for_label }}" class="text-sm font-medium text-slate-700">Логин</label>
+            {{ form.username }}
+            {% if form.username.errors %}
+            <p class="mt-2 text-sm text-rose-600">{{ form.username.errors|join:', ' }}</p>
+            {% endif %}
+          </div>
+
+          <div>
+            <label for="{{ form.password.id_for_label }}" class="text-sm font-medium text-slate-700">Пароль</label>
+            {{ form.password }}
+            {% if form.password.errors %}
+            <p class="mt-2 text-sm text-rose-600">{{ form.password.errors|join:', ' }}</p>
+            {% endif %}
+          </div>
+
+          <button type="submit" class="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            Войти
+          </button>
+        </form>
+      </section>
+    </div>
+  </div>
+</body>
+</html>

@@ -10,6 +10,7 @@ urlpatterns = [
     path('report/history/', views.report_history, name='report_history'),
     path('products/', views.product_list, name='product_list'),
     path('products/add/', views.product_add, name='product_add'),
+    path('products/import/', views.import_products_excel, name='import_products_excel'),
     path('products/<int:pk>/edit/', views.product_edit, name='product_edit'),
     path('products/<int:pk>/view/', views.product_view, name='product_view'),
     path('products/<int:pk>/delete/', views.delete_product, name='delete_product'),
