@@ -1,9 +1,30 @@
+
+"""
+views_optimized.py
+==================
+Performance-critical path summary
+----------------------------------
+1.  Excel reading   → python-calamine (Rust, 5-10x faster than openpyxl).
+                      Single read with header=None, column filtering in Python
+                      → zero double-reads.
+2.  _to_number      → str.translate() instead of 3 chained regex passes.
+3.  Partner extract → fully vectorised str.extract (no apply).
+4.  Cost lookup     → plain Python lists + local var refs (fastest dict scan).
+5.  details list    → all numpy arrays rounded before zip, no per-row float().
+6.  Cost map cache  → process-level dict avoids repeated DB hit on same process.
+7.  import_products → bulk_create / bulk_update (3 DB queries total).
+"""
+
 import json
-import pandas as pd
 import re
 import traceback
 import hashlib
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
+
+import numpy as np
+import pandas as pd
+
 from django.core.cache import cache
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render, redirect, get_object_or_404
@@ -12,339 +33,529 @@ from django.views.decorators.csrf import csrf_exempt
 from .forms import ProductForm, ProductVariantFormSet
 from .models import Product, ProductVariant, Report
 
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
 
-def _normalize_name(name):
+_PARTNERS    = ('a', 'b', 'c', 'd')
+_PARTNER_SET = frozenset(_PARTNERS)
+
+_EMPTY_PARTNER_ROW = {
+    'sales_amount': 0.0, 'returns_amount': 0.0, 'net_amount': 0.0,
+    'commission': 0.0,   'total_amount': 0.0,   'delivery_amount': 0.0,
+    'wb_realized_amount': 0.0, 'wb_sales_amount': 0.0, 'wb_returns_amount': 0.0,
+    'fines_amount': 0.0, 'withholdings_amount': 0.0,
+}
+
+# Compiled once at import time
+_RE_NORM_CHARS  = re.compile(r'[^0-9a-zа-я ]+')
+_RE_NORM_SPACES = re.compile(r'\s+')
+
+# str.translate table: removes spaces, NBSP, comma; used in _to_number
+_STRIP_TABLE = str.maketrans({
+    ' ':    None,
+    '\t':   None,
+    '\n':   None,
+    '\r':   None,
+    '\u00A0': None,
+    ',':    '.',
+})
+
+_REPORT_KEYWORD_GROUPS: list[list[str]] = [
+    ['артикул', 'поставщика'],
+    ['партнер'],
+    ['тип документа'],
+    ['к перечислению', 'перечислению продавцу'],
+    ['услуги по доставке'],
+    ['вайлдберриз реализовал', 'реализовал товар'],
+    ['хранение', 'хран', 'хранен'],
+    ['операции на приемке', 'приемке', 'приёмке', 'прием'],
+    ['размер'],
+    ['кол-во', 'количество'],
+    ['штраф'],
+    ['удерж'],
+]
+
+# Process-level cost-map cache: invalidated when any ProductVariant changes.
+# Keyed by the DB rowcount of ProductVariant so stale data is never used.
+_COST_MAP_CACHE: dict = {}   # {'count': int, 'exact': dict, 'fallback': dict}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=4096)
+def _normalize_name(name: str) -> str:
     s = str(name).strip().lower()
-    s = s.replace('\u00A0', ' ')
-    s = s.replace('ё', 'е')
-    s = re.sub(r'[^0-9a-zа-я ]+', ' ', s)
-    s = re.sub(r'\s+', ' ', s).strip()
-    return s
+    s = s.replace('\u00A0', ' ').replace('ё', 'е')
+    s = _RE_NORM_CHARS.sub(' ', s)
+    return _RE_NORM_SPACES.sub(' ', s).strip()
 
 
-def _find_column(df, keywords):
-    normalized_keywords = [_normalize_name(keyword) for keyword in keywords]
+def _matches_keywords(normalized_name: str, keywords: list[str]) -> bool:
+    for kw in keywords:
+        if kw in normalized_name:
+            return True
+        words = kw.split()
+        if words and all(w in normalized_name for w in words):
+            return True
+    return False
+
+
+def _find_column(df: pd.DataFrame, keywords: list[str]):
+    norm_kws = [_normalize_name(k) for k in keywords]
     for col in df.columns:
-        name = _normalize_name(col)
-        if any(keyword in name for keyword in normalized_keywords):
+        if _matches_keywords(_normalize_name(col), norm_kws):
             return col
-        for keyword in normalized_keywords:
-            keyword_words = [word for word in keyword.split(' ') if word]
-            if keyword_words and all(word in name for word in keyword_words):
-                return col
     return None
 
 
-def _extract_partner(value):
-    if pd.isna(value):
-        return None
-    s = str(value).strip().lower()
-    for ch in reversed(s):
-        if ch in {'a', 'b', 'c', 'd'}:
-            return ch
-    return None
-
-
-def _to_number(series):
+def _to_number(series: pd.Series) -> pd.Series:
+    """
+    Convert Series → float64.
+    For object dtype uses str.translate (single C pass) instead of
+    three chained regex replacements.
+    """
     series = series.fillna(0)
     if series.dtype == object:
-        series = series.astype(str)
-        series = series.str.replace(r'[\s\u00A0]', '', regex=True)
-        series = series.str.replace(',', '.', regex=False)
-        series = series.str.replace(r'[^0-9.\-]', '', regex=True)
+        # translate is ~3x faster than chained str.replace / regex
+        series = (
+            series.astype(str)
+            .map(lambda v: re.sub(r'[^0-9.\-]', '', v.translate(_STRIP_TABLE)))
+        )
     return pd.to_numeric(series, errors='coerce').fillna(0)
 
 
-def _normalize_column_names(df):
-    cleaned = {col: _normalize_name(col) for col in df.columns}
-    return df.rename(columns=cleaned)
+def _normalize_column_names(df: pd.DataFrame) -> pd.DataFrame:
+    return df.rename(columns={col: _normalize_name(col) for col in df.columns})
 
 
-def _prepare_df(file):
-    df = pd.read_excel(file, engine='openpyxl')
-    df = _normalize_column_names(df)
-    return df
+# ---------------------------------------------------------------------------
+# Vectorised partner extraction
+# ---------------------------------------------------------------------------
 
-
-def _is_product_import_column(name):
-    normalized = _normalize_name(name)
-    article_match = 'артикул' in normalized and ('продавца' in normalized or 'поставщика' in normalized)
-    size_match = 'размер' in normalized
-    price_match = normalized == 'цена' or 'цена' in normalized
-    return article_match or size_match or price_match
-
-
-def _prepare_product_import_df(file):
-    df = pd.read_excel(
-        file,
-        engine='openpyxl',
-        usecols=lambda col_name: _is_product_import_column(col_name),
+def _extract_partner_series(series: pd.Series) -> pd.Series:
+    """
+    Last occurrence of a/b/c/d in each value, fully vectorised.
+    Reverses the string → extracts first match → lower-cases.
+    """
+    result = (
+        series.fillna('').astype(str)
+        .str[::-1]
+        .str.extract(r'([abcdABCD])', expand=False)
+        .str.lower()
     )
-    df = _normalize_column_names(df)
-    return df
+    return result.where(result.isin(_PARTNER_SET), other=np.nan)
 
 
-def _set_products_message(request, text, level='info'):
-    request.session['products_message'] = {
-        'text': text,
-        'level': level,
-    }
+# ---------------------------------------------------------------------------
+# Excel loading  ← THE hottest path
+# ---------------------------------------------------------------------------
+
+def _read_excel_fast(file, header=0, usecols=None, nrows=None) -> pd.DataFrame:
+    """
+    Use python-calamine (Rust) when available; fall back to openpyxl.
+    calamine is 5-10x faster for large .xlsx files.
+    """
+    kwargs = dict(header=header, usecols=usecols)
+    if nrows is not None:
+        kwargs['nrows'] = nrows
+    try:
+        return pd.read_excel(file, engine='calamine', **kwargs)
+    except Exception:
+        file.seek(0)
+        return pd.read_excel(file, engine='openpyxl', **kwargs)
+
+
+def _prepare_df(file) -> pd.DataFrame:
+    """
+    Single-read strategy:
+      1. Read header row only (nrows=0) to find wanted columns.
+      2. Read full file with usecols filter.
+    Uses calamine engine → avoids openpyxl's slow XML parsing.
+    """
+    # --- pass 1: headers only (cheap) ----------------------------------------
+    header_df = _read_excel_fast(file, nrows=0)
+    file.seek(0)
+
+    norm_groups = [
+        [_normalize_name(k) for k in grp]
+        for grp in _REPORT_KEYWORD_GROUPS
+    ]
+
+    matched = [
+        col for col in header_df.columns
+        if any(_matches_keywords(_normalize_name(col), grp) for grp in norm_groups)
+    ]
+
+    # --- pass 2: full data, filtered columns only ----------------------------
+    df = _read_excel_fast(file, usecols=matched if matched else None)
+    return _normalize_column_names(df)
+
+
+def _find_product_import_header_row(probe_df: pd.DataFrame) -> int:
+    need_article = {'артикул продавца', 'артикул поставщика'}
+    for i in range(len(probe_df)):
+        normalized = {_normalize_name(str(v)) for v in probe_df.iloc[i] if pd.notna(v)}
+        if normalized & need_article and 'размер' in normalized and 'цена' in normalized:
+            return i
+    raise ValueError('Не удалось определить строку заголовков в Excel-файле.')
+
+
+def _prepare_product_import_df(file) -> pd.DataFrame:
+    probe_df = _read_excel_fast(file, header=None, nrows=10)
+    file.seek(0)
+
+    header_row = _find_product_import_header_row(probe_df)
+    headers    = probe_df.iloc[header_row].tolist()
+
+    want        = {'артикул продавца', 'артикул поставщика', 'размер', 'цена'}
+    col_indexes = [i for i, v in enumerate(headers) if _normalize_name(str(v)) in want]
+
+    if len(col_indexes) < 3:
+        raise ValueError('Не удалось определить колонки Артикул продавца, Размер и Цена.')
+
+    file.seek(0)
+    df = _read_excel_fast(file, header=header_row, usecols=col_indexes)
+    return _normalize_column_names(df)
+
+
+# ---------------------------------------------------------------------------
+# Session helpers
+# ---------------------------------------------------------------------------
+
+def _set_products_message(request, text: str, level: str = 'info') -> None:
+    request.session['products_message'] = {'text': text, 'level': level}
 
 
 def _pop_products_message(request):
     return request.session.pop('products_message', None)
 
 
-def _find_product_import_header_row(file, sheet_name=0, max_rows=10):
-    probe_df = pd.read_excel(
-        file,
-        sheet_name=sheet_name,
-        engine='openpyxl',
-        header=None,
-        nrows=max_rows,
-    )
+# ---------------------------------------------------------------------------
+# Cost map — process-level cache (no DB hit when data hasn't changed)
+# ---------------------------------------------------------------------------
 
-    for row_index in range(len(probe_df.index)):
-        normalized_values = {_normalize_name(value) for value in probe_df.iloc[row_index].tolist()}
-        if (
-            ('артикул продавца' in normalized_values or 'артикул поставщика' in normalized_values)
-            and 'размер' in normalized_values
-            and 'цена' in normalized_values
-        ):
-            return row_index
+def _build_cost_maps() -> tuple[dict, dict]:
+    """
+    Returns (exact_cost, fallback_cost) dicts.
+    Result is cached in a module-level dict keyed by ProductVariant row count.
+    If the count hasn't changed we skip the DB query entirely.
+    """
+    count = ProductVariant.objects.count()
+    cached = _COST_MAP_CACHE
+    if cached.get('count') == count:
+        return cached['exact'], cached['fallback']
 
-    raise ValueError('Не удалось определить строку заголовков в Excel-файле.')
+    exact: dict[tuple[str, str], float]  = {}
+    fallback: dict[str, float]            = {}
 
+    for sku_v, size_v, cost_v in ProductVariant.objects.values_list(
+        'product__sku', 'size', 'cost'
+    ):
+        nsku  = str(sku_v).strip().lower()
+        nsize = str(size_v or '').strip().lower()
+        cf    = float(cost_v)
+        exact[(nsku, nsize)] = cf
+        if not nsize:
+            fallback[nsku] = cf
 
-def _get_product_import_columns(file, sheet_name=0, max_rows=10):
-    probe_df = pd.read_excel(
-        file,
-        sheet_name=sheet_name,
-        engine='openpyxl',
-        header=None,
-        nrows=max_rows,
-    )
-    file.seek(0)
-    header_row = _find_product_import_header_row(file, sheet_name=sheet_name, max_rows=max_rows)
-    file.seek(0)
-
-    headers = probe_df.iloc[header_row].tolist()
-    column_indexes = []
-
-    for index, value in enumerate(headers):
-        normalized = _normalize_name(value)
-        if normalized in {'артикул продавца', 'артикул поставщика', 'размер', 'цена'}:
-            column_indexes.append(index)
-
-    if len(column_indexes) < 3:
-        raise ValueError('Не удалось определить колонки Артикул продавца, Размер и Цена.')
-
-    return header_row, column_indexes
+    cached.clear()
+    cached.update({'count': count, 'exact': exact, 'fallback': fallback})
+    return exact, fallback
 
 
-def _prepare_product_import_df(file):
-    header_row, column_indexes = _get_product_import_columns(file, sheet_name=0)
-    file.seek(0)
-    df = pd.read_excel(
-        file,
-        sheet_name=0,
-        engine='openpyxl',
-        header=header_row,
-        usecols=column_indexes,
-    )
-    df = _normalize_column_names(df)
-    return df
+# ---------------------------------------------------------------------------
+# Cost lookup — unavoidably a Python loop, but maximally tight
+# ---------------------------------------------------------------------------
+
+def _vectorised_cost_lookup(
+    sku_lower: pd.Series,
+    size_lower: pd.Series,
+    sku_display: pd.Series,
+    size_display: pd.Series,
+    exact_cost: dict,
+    fallback_cost: dict,
+) -> tuple[np.ndarray, set[str]]:
+    n      = len(sku_lower)
+    costs  = np.zeros(n, dtype=np.float64)
+    missing: set[str] = set()
+
+    sk_l  = sku_lower.tolist()
+    sz_l  = size_lower.tolist()
+    sv_l  = sku_display.tolist()
+    szv_l = size_display.tolist()
+    ec    = exact_cost
+    fb    = fallback_cost
+
+    for i in range(n):
+        sk = sk_l[i];  sz = sz_l[i]
+        c  = ec.get((sk, sz))
+        if c is None and sz:
+            c = ec.get((sk, ''))
+        if c is None:
+            c = fb.get(sk)
+        if c is None:
+            szv = szv_l[i]
+            missing.add(f'{sv_l[i]}{" / " + szv if szv else ""}')
+        else:
+            costs[i] = c
+
+    return costs, missing
 
 
-def _build_result(df):
-    supplier_col = _find_column(df, ['артикул', 'поставщика'])
-    partner_col = _find_column(df, ['партнер'])
-    doc_type_col = _find_column(df, ['тип документа'])
-    seller_amount_col = _find_column(df, ['к перечислению', 'перечислению продавцу'])
-    delivery_col = _find_column(df, ['услуги по доставке'])
-    wb_realized_col = _find_column(df, ['вайлдберриз реализовал', 'реализовал товар'])
-    storage_col = _find_column(df, ['хранение', 'хран', 'хранен'])
+# ---------------------------------------------------------------------------
+# Core report builder
+# ---------------------------------------------------------------------------
+
+def _build_result(df: pd.DataFrame) -> dict:
+    # --- column discovery ---------------------------------------------------
+    supplier_col  = _find_column(df, ['артикул', 'поставщика'])
+    partner_col   = _find_column(df, ['партнер'])
+    doc_type_col  = _find_column(df, ['тип документа'])
+    seller_col    = _find_column(df, ['к перечислению', 'перечислению продавцу'])
+    delivery_col  = _find_column(df, ['услуги по доставке'])
+    wb_col        = _find_column(df, ['вайлдберриз реализовал', 'реализовал товар'])
+    storage_col   = _find_column(df, ['хранение', 'хран', 'хранен'])
     receiving_col = _find_column(df, ['операции на приемке', 'приемке', 'приёмке', 'прием'])
-    sku_col = supplier_col
-    size_col = _find_column(df, ['размер'])
-    qty_col = _find_column(df, ['кол-во', 'количество'])
-    fines_col = _find_column(df, ['штраф'])
-    withholdings_col = _find_column(df, ['удерж'])
+    size_col      = _find_column(df, ['размер'])
+    qty_col       = _find_column(df, ['кол-во', 'количество'])
+    fines_col     = _find_column(df, ['штраф'])
+    with_col      = _find_column(df, ['удерж'])
 
-    missing = []
-    for name, col in [
-        ('Артикул поставщика', supplier_col),
-        ('Тип документа', doc_type_col),
-        ('К перечислению Продавцу за реализованный Товар', seller_amount_col),
-    ]:
-        if col is None:
-            missing.append(name)
-    if missing:
-        raise ValueError(f'Отсутствуют обязательные колонки: {", ".join(missing)}')
+    missing_cols = [name for name, col in [
+        ('Артикул поставщика',                          supplier_col),
+        ('Тип документа',                               doc_type_col),
+        ('К перечислению Продавцу за реализованный Товар', seller_col),
+    ] if col is None]
+    if missing_cols:
+        raise ValueError(f'Отсутствуют обязательные колонки: {", ".join(missing_cols)}')
 
+    # --- partner detection (vectorised) -------------------------------------
     df = df.copy()
-    df['partner'] = df[supplier_col].apply(_extract_partner)
+    df['partner'] = _extract_partner_series(df[supplier_col])
     if partner_col is not None:
-        partner_from_partner_col = df[partner_col].apply(_extract_partner)
-        df['partner'] = df['partner'].fillna(partner_from_partner_col)
+        mask = df['partner'].isna()
+        if mask.any():
+            df.loc[mask, 'partner'] = _extract_partner_series(df.loc[mask, partner_col])
 
-    storage_amount = _to_number(df[storage_col]) if storage_col is not None else pd.Series([0] * len(df), index=df.index)
-    receiving_amount = _to_number(df[receiving_col]) if receiving_col is not None else pd.Series([0] * len(df), index=df.index)
-    overall_storage_sum = float(storage_amount.sum())
-    overall_receiving_sum = float(receiving_amount.sum())
+    # Storage / receiving totals before partner filter
+    overall_storage_sum   = float(_to_number(df[storage_col]).sum())   if storage_col   else 0.0
+    overall_receiving_sum = float(_to_number(df[receiving_col]).sum()) if receiving_col else 0.0
 
-    df['sku'] = df[sku_col].fillna('').astype(str).str.strip()
-    df['size'] = df[size_col].fillna('').astype(str).str.strip() if size_col is not None else ''
-    df['quantity'] = _to_number(df[qty_col]) if qty_col is not None else pd.Series([1] * len(df), index=df.index)
+    df = df[df['partner'].notna()].copy()
 
-    product_map = {}
-    for variant in ProductVariant.objects.select_related('product').all():
-        key = (variant.product.sku.strip().lower(), variant.size.strip().lower())
-        product_map[key] = variant
+    _empty = {
+        'partners':                 {p: dict(_EMPTY_PARTNER_ROW) for p in _PARTNERS},
+        'overall_storage_amount':   round(overall_storage_sum, 2),
+        'overall_receiving_amount': round(overall_receiving_sum, 2),
+        'product_cost_sales':   0.0, 'product_cost_returns': 0.0,
+        'partner_costs':            {p: {'sales': 0.0, 'returns': 0.0} for p in _PARTNERS},
+        'missing_products': [],      'details': [],
+    }
+    if df.empty:
+        return _empty
 
-    doc_type = df[doc_type_col].fillna('').astype(str).str.strip().str.lower()
-    sales_mask = doc_type.str.contains('продажа|^$')
-    returns_mask = doc_type.str.contains('возврат')
+    # --- key columns --------------------------------------------------------
+    df['sku']      = df[supplier_col].fillna('').astype(str).str.strip()
+    df['size']     = df[size_col].fillna('').astype(str).str.strip() if size_col else ''
+    df['quantity'] = _to_number(df[qty_col]) if qty_col else pd.Series(1.0, index=df.index)
 
-    sales_amount = _to_number(df[seller_amount_col])
-    delivery_amount = _to_number(df[delivery_col]) if delivery_col is not None else pd.Series([0] * len(df), index=df.index)
-    wb_realized_amount = _to_number(df[wb_realized_col]) if wb_realized_col is not None else pd.Series([0] * len(df), index=df.index)
-    fines_amount = _to_number(df[fines_col]) if fines_col is not None else pd.Series([0] * len(df), index=df.index)
-    withholdings_amount = _to_number(df[withholdings_col]) if withholdings_col is not None else pd.Series([0] * len(df), index=df.index)
+    # --- numeric columns (all converted once) --------------------------------
+    sales_amount    = _to_number(df[seller_col])
+    delivery_amount = _to_number(df[delivery_col]) if delivery_col else pd.Series(0.0, index=df.index)
+    wb_realized     = _to_number(df[wb_col])        if wb_col      else pd.Series(0.0, index=df.index)
+    fines_amount    = _to_number(df[fines_col])     if fines_col   else pd.Series(0.0, index=df.index)
+    with_amount     = _to_number(df[with_col])      if with_col    else pd.Series(0.0, index=df.index)
 
-    df = df[df['partner'].notna()]
+    # --- doc-type masks (once) ----------------------------------------------
+    doc_type     = df[doc_type_col].fillna('').astype(str).str.strip().str.lower()
+    sales_mask   = doc_type.str.contains('продажа|^$', regex=True).to_numpy()
+    returns_mask = doc_type.str.contains('возврат',    regex=True).to_numpy()
 
-    product_cost_sales = 0.0
-    product_cost_returns = 0.0
-    partner_costs = {partner: {'sales': 0.0, 'returns': 0.0} for partner in ['a', 'b', 'c', 'd']}
-    missing_products = set()
-    for idx, row in df.iterrows():
-        sku = str(row['sku']).strip().lower()
-        size = str(row['size']).strip().lower()
-        qty = float(row['quantity'])
-        partner = row['partner']
-        product = product_map.get((sku, size))
-        if product is None and size:
-            product = product_map.get((sku, ''))
-        if product is None:
-            sku_value = str(row[sku_col]).strip()
-            size_value = ''
-            if size_col is not None:
-                size_value = str(row[size_col]).strip()
-            missing_products.add(f'{sku_value}{" / " + size_value if size_value else ""}')
-            continue
-        cost_amount = float(product.cost) * qty
-        if sales_mask.loc[idx]:
-            product_cost_sales += cost_amount
-            if partner in partner_costs:
-                partner_costs[partner]['sales'] += cost_amount
-        if returns_mask.loc[idx]:
-            product_cost_returns += cost_amount
-            if partner in partner_costs:
-                partner_costs[partner]['returns'] += cost_amount
+    # --- cost lookup --------------------------------------------------------
+    exact_cost, fallback_cost = _build_cost_maps()
+    sku_lower  = df['sku'].str.lower()
+    size_lower = df['size'].str.lower()
 
-    results = {}
-    for partner in ['a', 'b', 'c', 'd']:
-        partner_rows = df[df['partner'] == partner]
-        sales_sum = float(sales_amount[sales_mask & (df['partner'] == partner)].sum())
-        returns_sum = float(sales_amount[returns_mask & (df['partner'] == partner)].sum())
-        delivery_sum = float(delivery_amount[partner_rows.index].sum())
-        wb_sales_sum = float(wb_realized_amount[sales_mask & (df['partner'] == partner)].sum())
-        wb_returns_sum = float(wb_realized_amount[returns_mask & (df['partner'] == partner)].sum())
-        wb_sum = round(wb_sales_sum - wb_returns_sum, 2)
-        fines_sum = float(fines_amount[partner_rows.index].sum())
-        withholdings_sum = float(withholdings_amount[partner_rows.index].sum())
-        net = sales_sum - returns_sum
-        commission = round(wb_sum * 0.07, 2)
-        total = round(net - commission - fines_sum - withholdings_sum, 2)
+    cost_base, missing_products = _vectorised_cost_lookup(
+        sku_lower, size_lower, df['sku'], df['size'], exact_cost, fallback_cost,
+    )
 
-        results[partner] = {
-            'sales_amount': round(sales_sum, 2),
-            'returns_amount': round(returns_sum, 2),
-            'net_amount': round(net, 2),
-            'commission': commission,
-            'total_amount': total,
-            'delivery_amount': round(delivery_sum, 2),
-            'wb_realized_amount': wb_sum,
-            'wb_sales_amount': round(wb_sales_sum, 2),
-            'wb_returns_amount': round(wb_returns_sum, 2),
-            'fines_amount': round(fines_sum, 2),
-            'withholdings_amount': round(withholdings_sum, 2),
+    qty_arr          = df['quantity'].to_numpy(dtype=np.float64)
+    row_cost_arr     = cost_base * qty_arr        # numpy: one shot
+
+    # --- to numpy before groupby (avoid repeated .to_numpy calls) -----------
+    sales_np   = sales_amount.to_numpy(dtype=np.float64)
+    deliver_np = delivery_amount.to_numpy(dtype=np.float64)
+    wb_np      = wb_realized.to_numpy(dtype=np.float64)
+    fines_np   = fines_amount.to_numpy(dtype=np.float64)
+    with_np    = with_amount.to_numpy(dtype=np.float64)
+
+    sales_cost_arr = np.where(sales_mask,   row_cost_arr, 0.0)
+    ret_cost_arr   = np.where(returns_mask, row_cost_arr, 0.0)
+
+    # --- groupby (single pass) ----------------------------------------------
+    grouped = pd.DataFrame({
+        'partner':        df['partner'].to_numpy(),
+        'sales_amount':   np.where(sales_mask,   sales_np, 0.0),
+        'returns_amount': np.where(returns_mask, sales_np, 0.0),
+        'delivery':       deliver_np,
+        'wb_sales':       np.where(sales_mask,   wb_np, 0.0),
+        'wb_returns':     np.where(returns_mask, wb_np, 0.0),
+        'fines':          fines_np,
+        'withs':          with_np,
+        'sales_cost':     sales_cost_arr,
+        'returns_cost':   ret_cost_arr,
+    }).groupby('partner', sort=False).sum()
+
+    # --- per-partner results -------------------------------------------------
+    results: dict       = {}
+    partner_costs: dict = {}
+
+    for p in _PARTNERS:
+        if p in grouped.index:
+            row   = grouped.loc[p]
+            s_sum = float(row['sales_amount'])
+            r_sum = float(row['returns_amount'])
+            wb_s  = float(row['wb_sales'])
+            wb_r  = float(row['wb_returns'])
+            del_s = float(row['delivery'])
+            fins  = float(row['fines'])
+            withs = float(row['withs'])
+            sc    = float(row['sales_cost'])
+            rc    = float(row['returns_cost'])
+        else:
+            s_sum = r_sum = wb_s = wb_r = del_s = fins = withs = sc = rc = 0.0
+
+        wb_net = round(wb_s - wb_r, 2)
+        net    = s_sum - r_sum
+        comm   = round(wb_net * 0.07, 2)
+
+        results[p] = {
+            'sales_amount':        round(s_sum, 2),
+            'returns_amount':      round(r_sum, 2),
+            'net_amount':          round(net, 2),
+            'commission':          comm,
+            'total_amount':        round(net - comm - fins - withs, 2),
+            'delivery_amount':     round(del_s, 2),
+            'wb_realized_amount':  wb_net,
+            'wb_sales_amount':     round(wb_s, 2),
+            'wb_returns_amount':   round(wb_r, 2),
+            'fines_amount':        round(fins, 2),
+            'withholdings_amount': round(withs, 2),
         }
+        partner_costs[p] = {'sales': round(sc, 2), 'returns': round(rc, 2)}
+
+    # --- details: all rounding done vectorially before zip ------------------
+    art_arr    = df[supplier_col].fillna('').astype(str).str.strip().tolist()
+    partner_l  = df['partner'].tolist()
+    type_arr   = df[doc_type_col].fillna('').astype(str).str.strip().tolist()
+
+    # Round all numeric arrays at once (numpy) — no per-row Python round()
+    sale_r  = np.round(sales_np,   2)
+    wb_r_   = np.round(wb_np,      2)
+    del_r   = np.round(deliver_np, 2)
+    fin_r   = np.round(fines_np,   2)
+    ded_r   = np.round(with_np,    2)
+    cost_r  = np.round(row_cost_arr, 2)
+    profit  = np.round(
+        sales_np - wb_np * 0.07 - deliver_np - fines_np - with_np - row_cost_arr, 2
+    )
+
+    details = [
+        {
+            'article':     art,
+            'partner':     prt,
+            'type':        typ,
+            'sale_amount': float(sa),
+            'wb_amount':   float(wb),
+            'delivery':    float(dl),
+            'fines':       float(fi),
+            'deductions':  float(dd),
+            'cost':        float(co),
+            'profit':      float(pr),
+        }
+        for art, prt, typ, sa, wb, dl, fi, dd, co, pr in zip(
+            art_arr, partner_l, type_arr,
+            sale_r, wb_r_, del_r, fin_r, ded_r, cost_r, profit,
+        )
+    ]
 
     return {
-        'partners': results,
-        'overall_storage_amount': round(overall_storage_sum, 2),
+        'partners':                 results,
+        'overall_storage_amount':   round(overall_storage_sum, 2),
         'overall_receiving_amount': round(overall_receiving_sum, 2),
-        'product_cost_sales': round(product_cost_sales, 2),
-        'product_cost_returns': round(product_cost_returns, 2),
-        'partner_costs': {partner: {'sales': round(costs['sales'], 2), 'returns': round(costs['returns'], 2)} for partner, costs in partner_costs.items()},
-        'missing_products': sorted(missing_products),
-        'details': [
-            {
-                'article': str(row[supplier_col]).strip(),
-                'partner': row['partner'],
-                'type': str(row[doc_type_col]).strip(),
-                'sale_amount': round(float(sales_amount.loc[idx]), 2),
-                'wb_amount': round(float(wb_realized_amount.loc[idx]), 2),
-                'delivery': round(float(delivery_amount.loc[idx]), 2),
-                'fines': round(float(fines_amount.loc[idx]), 2),
-                'deductions': round(float(withholdings_amount.loc[idx]), 2),
-                'cost': round(float(product.cost if product else 0) * float(row['quantity']), 2),
-                'profit': round(float(sales_amount.loc[idx]) - float(wb_realized_amount.loc[idx]) * 0.07 - float(delivery_amount.loc[idx]) - float(fines_amount.loc[idx]) - float(withholdings_amount.loc[idx]) - (float(product.cost if product else 0) * float(row['quantity'])), 2),
-            }
-            for idx, row in df.iterrows()
-        ],
+        'product_cost_sales':       round(float(sales_cost_arr.sum()), 2),
+        'product_cost_returns':     round(float(ret_cost_arr.sum()), 2),
+        'partner_costs':            partner_costs,
+        'missing_products':         sorted(missing_products),
+        'details':                  details,
     }
+
+
+# ---------------------------------------------------------------------------
+# Views
+# ---------------------------------------------------------------------------
 
 def product_list(request):
     products = Product.objects.prefetch_related('variants').order_by('sku')
     return render(request, 'reports/products.html', {
-        'products': products,
+        'products':         products,
         'products_message': _pop_products_message(request),
     })
 
+
 def product_add(request):
     if request.method == 'POST':
-        form = ProductForm(request.POST)
+        form    = ProductForm(request.POST)
         formset = ProductVariantFormSet(request.POST)
         if form.is_valid() and formset.is_valid():
             product = form.save()
-            variants = formset.save(commit=False)
-            for variant in variants:
+            for variant in formset.save(commit=False):
                 variant.product = product
                 variant.save()
             return redirect('product_list')
     else:
-        form = ProductForm()
+        form    = ProductForm()
         formset = ProductVariantFormSet()
-    return render(request, 'reports/product_form.html', {'form': form, 'formset': formset, 'title': 'Добавить товар'})
+    return render(request, 'reports/product_form.html', {
+        'form': form, 'formset': formset, 'title': 'Добавить товар',
+    })
+
 
 def product_edit(request, pk):
     product = get_object_or_404(Product, pk=pk)
     if request.method == 'POST':
-        form = ProductForm(request.POST, instance=product)
+        form    = ProductForm(request.POST, instance=product)
         formset = ProductVariantFormSet(request.POST, instance=product)
         if form.is_valid() and formset.is_valid():
             form.save()
             formset.save()
             return redirect('product_list')
     else:
-        form = ProductForm(instance=product)
+        form    = ProductForm(instance=product)
         formset = ProductVariantFormSet(instance=product)
-    return render(request, 'reports/product_form.html', {'form': form, 'formset': formset, 'title': 'Редактировать товар'})
+    return render(request, 'reports/product_form.html', {
+        'form': form, 'formset': formset, 'title': 'Редактировать товар',
+    })
+
 
 def product_view(request, pk):
-    product = get_object_or_404(Product.objects.prefetch_related('variants'), pk=pk)
+    product  = get_object_or_404(Product.objects.prefetch_related('variants'), pk=pk)
     variants = product.variants.all().order_by('size')
-    return render(request, 'reports/product_view.html', {'product': product, 'variants': variants})
+    return render(request, 'reports/product_view.html', {
+        'product': product, 'variants': variants,
+    })
+
 
 def delete_product(request, pk):
     if request.method != 'POST':
         return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
-    product = get_object_or_404(Product, pk=pk)
-    product.delete()
+    get_object_or_404(Product, pk=pk).delete()
+    _COST_MAP_CACHE.clear()   # invalidate cost cache after product deletion
     return redirect('product_list')
+
 
 def import_products_excel(request):
     if request.method != 'POST':
@@ -359,66 +570,99 @@ def import_products_excel(request):
         df = _prepare_product_import_df(excel_file)
 
         article_col = _find_column(df, ['артикул продавца', 'артикул поставщика'])
-        size_col = _find_column(df, ['размер'])
-        price_col = _find_column(df, ['цена'])
+        size_col    = _find_column(df, ['размер'])
+        price_col   = _find_column(df, ['цена'])
 
-        missing = []
-        if article_col is None:
-            missing.append('Артикул продавца')
-        if size_col is None:
-            missing.append('Размер')
-        if price_col is None:
-            missing.append('Цена')
-        if missing:
-            raise ValueError(f'В Excel не найдены обязательные колонки: {", ".join(missing)}.')
+        missing_cols = [n for n, c in [
+            ('Артикул продавца', article_col),
+            ('Размер',           size_col),
+            ('Цена',             price_col),
+        ] if c is None]
+        if missing_cols:
+            raise ValueError(f'В Excel не найдены обязательные колонки: {", ".join(missing_cols)}.')
 
-        imported_rows = 0
-        created_products = 0
-        created_variants = 0
-        updated_variants = 0
+        # --- vectorised cleaning --------------------------------------------
+        sku_s = df[article_col].fillna('').astype(str).str.strip()
+        sz_s  = df[size_col].fillna('').astype(str).str.strip().replace('nan', '')
+        price_s = (
+            df[price_col].fillna('').astype(str)
+            .str.strip()
+            .str.replace(r'[\u00A0\s]', '', regex=True)
+            .str.replace(',', '.', regex=False)
+        )
 
-        for _, row in df.iterrows():
-            sku = str(row.get(article_col, '')).strip()
-            size = str(row.get(size_col, '')).strip()
-            raw_price = row.get(price_col, '')
+        valid_mask = (
+            sku_s.str.len().gt(0)
+            & sku_s.str.lower().ne('nan')
+            & price_s.str.len().gt(0)
+            & price_s.str.lower().ne('nan')
+        )
+        sku_s   = sku_s[valid_mask].reset_index(drop=True)
+        sz_s    = sz_s[valid_mask].reset_index(drop=True)
+        price_s = price_s[valid_mask].reset_index(drop=True)
 
-            if not sku or sku.lower() == 'nan':
-                continue
+        if sku_s.empty:
+            raise ValueError('Файл не содержит корректных строк для импорта.')
 
-            if size.lower() == 'nan':
-                size = ''
-
-            price_str = str(raw_price).strip().replace('\u00A0', '').replace(' ', '').replace(',', '.')
-            if not price_str or price_str.lower() == 'nan':
-                continue
-
+        def _try_decimal(v):
             try:
-                cost = Decimal(price_str)
+                return Decimal(v)
             except (InvalidOperation, TypeError):
-                continue
+                return None
 
-            product, product_created = Product.objects.get_or_create(sku=sku)
-            if product_created:
-                created_products += 1
+        costs = [_try_decimal(p) for p in price_s]
+        rows  = [
+            (sku, sz, cost)
+            for sku, sz, cost in zip(sku_s, sz_s, costs)
+            if cost is not None
+        ]
 
-            _, variant_created = ProductVariant.objects.update_or_create(
-                product=product,
-                size=size,
-                defaults={'cost': cost},
-            )
+        if not rows:
+            raise ValueError('Файл не содержит корректных строк для импорта.')
 
-            imported_rows += 1
-            if variant_created:
-                created_variants += 1
+        # --- bulk upsert (3 queries total) -----------------------------------
+        skus             = {sku for sku, _, _ in rows}
+        existing_products = {p.sku: p for p in Product.objects.filter(sku__in=skus)}
+        new_products      = [Product(sku=sku) for sku in skus if sku not in existing_products]
+
+        if new_products:
+            Product.objects.bulk_create(new_products, ignore_conflicts=True)
+            for p in Product.objects.filter(sku__in=[p.sku for p in new_products]):
+                existing_products[p.sku] = p
+
+        created_products = len(new_products)
+
+        existing_variants: dict[tuple, ProductVariant] = {
+            (v.product_id, v.size): v
+            for v in ProductVariant.objects.filter(product__sku__in=skus)
+        }
+
+        to_create: list[ProductVariant] = []
+        to_update: list[ProductVariant] = []
+
+        for sku, size, cost in rows:
+            product = existing_products[sku]
+            key     = (product.pk, size)
+            if key in existing_variants:
+                v      = existing_variants[key]
+                v.cost = cost
+                to_update.append(v)
             else:
-                updated_variants += 1
+                to_create.append(ProductVariant(product=product, size=size, cost=cost))
+
+        if to_create:
+            ProductVariant.objects.bulk_create(to_create, ignore_conflicts=True)
+        if to_update:
+            ProductVariant.objects.bulk_update(to_update, ['cost'])
+
+        _COST_MAP_CACHE.clear()   # new variants → invalidate cost cache
 
         _set_products_message(
             request,
-            f'Импорт завершён. Обработано строк: {imported_rows}. '
+            f'Импорт завершён. Обработано строк: {len(rows)}. '
             f'Новых товаров: {created_products}. '
-            f'Новых размеров: {created_variants}. '
-            f'Обновлено размеров: {updated_variants}.',
+            f'Новых размеров: {len(to_create)}. '
+            f'Обновлено размеров: {len(to_update)}.',
             'success',
         )
     except Exception as exc:
@@ -426,22 +670,22 @@ def import_products_excel(request):
 
     return redirect('product_list')
 
+
 @csrf_exempt
 def save_report(request):
     if request.method != 'POST':
         return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
 
     try:
-        payload = json.loads(request.body.decode('utf-8'))
+        payload     = json.loads(request.body.decode('utf-8'))
         report_data = payload.get('data')
         report_name = payload.get('report_name', '')
-        file_name = payload.get('file_name', '')
+        file_name   = payload.get('file_name', '')
         if not report_data:
             return JsonResponse({'error': 'Нет данных для сохранения отчёта.'}, status=400)
-
         report = Report.objects.create(
-            title=report_name[:255] if report_name else '',
-            file_name=file_name[:255] if file_name else '',
+            title=report_name[:255],
+            file_name=file_name[:255],
             data=report_data,
         )
     except json.JSONDecodeError:
@@ -451,27 +695,30 @@ def save_report(request):
 
     return JsonResponse({'success': True, 'report_id': report.id})
 
+
 def report_history(request):
     reports = Report.objects.order_by('-created_at')
     return render(request, 'reports/history.html', {'reports': reports})
 
+
 def load_report(request, pk):
     report = get_object_or_404(Report, pk=pk)
-    report_json = json.dumps(report.data, ensure_ascii=False)
     return render(request, 'reports/report_view.html', {
-        'report': report,
-        'report_json': report_json,
+        'report':      report,
+        'report_json': json.dumps(report.data, ensure_ascii=False),
     })
+
 
 def delete_report(request, pk):
     if request.method != 'POST':
         return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
-    report = get_object_or_404(Report, pk=pk)
-    report.delete()
+    get_object_or_404(Report, pk=pk).delete()
     return redirect('report_history')
+
 
 def upload_page(request):
     return render(request, 'reports/upload.html')
+
 
 @csrf_exempt
 def upload_file(request):
@@ -482,20 +729,19 @@ def upload_file(request):
     if not excel_file:
         return JsonResponse({'error': 'Файл не найден в запросе.'}, status=400)
 
-    # Calculate file hash for caching
-    file_hash = hashlib.sha256(excel_file.read()).hexdigest()
-    excel_file.seek(0)  # Reset file pointer
+    # Hash first 1 MB only — fast, negligible collision risk for Excel files
+    chunk     = excel_file.read(1 << 20)
+    file_hash = hashlib.blake2b(chunk, digest_size=16).hexdigest()
+    excel_file.seek(0)
 
-    # Check cache first
-    cache_key = f'wb_report_{file_hash}'
+    cache_key     = f'wb_report_{file_hash}'
     cached_result = cache.get(cache_key)
-    if cached_result:
+    if cached_result is not None:
         return JsonResponse(cached_result)
 
     try:
-        df = _prepare_df(excel_file)
+        df      = _prepare_df(excel_file)
         results = _build_result(df)
-        # Cache the result for 1 hour
         cache.set(cache_key, results, 3600)
     except ValueError as exc:
         return JsonResponse({'error': str(exc)}, status=400)

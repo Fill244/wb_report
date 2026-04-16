@@ -118,7 +118,7 @@
     };
 
     function stat(title, value) {
-      const displayTitle = title === 'Комиссия' || title === 'РљРѕРјРёСЃСЃРёСЏ' ? 'УСН' : title;
+      const displayTitle = title === 'Комиссия' ? 'УСН' : title;
       return `
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
           <p class="text-sm font-semibold text-slate-700">${displayTitle}</p>
@@ -214,7 +214,7 @@
         <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           ${stat('Продажи', stats.sales_amount)}
           ${stat('Возвраты', stats.returns_amount)}
-          ${stat('Комиссия', stats.commission)}
+          ${stat('УСН', stats.commission)}
           ${stat('Итог WB', stats.total_amount)}
           ${stat('Доставка', stats.delivery_amount)}
           ${stat('WB реализовал (Пр)', stats.wb_realized_amount)}
