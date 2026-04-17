@@ -32,6 +32,16 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .forms import ProductForm, ProductVariantFormSet
 from .models import Product, ProductVariant, Report
+from .services.pdf_parser import parse_pdf_file
+from .services.report_processor_multi import (
+    apply_usn_adjustments,
+    merge_reports,
+    parse_usn_file,
+    process_report,
+    sum_file3_usn,
+    sync_partner_usn_alias,
+    total_partner_usn,
+)
 
 # ---------------------------------------------------------------------------
 # Module-level constants
@@ -42,6 +52,7 @@ _PARTNER_SET = frozenset(_PARTNERS)
 
 _EMPTY_PARTNER_ROW = {
     'sales_amount': 0.0, 'returns_amount': 0.0, 'net_amount': 0.0,
+    # commission: УСН в рублях (7% от wb_net в отчёте; в multi-режиме +7% от выкупа из файла 3)
     'commission': 0.0,   'total_amount': 0.0,   'delivery_amount': 0.0,
     'wb_realized_amount': 0.0, 'wb_sales_amount': 0.0, 'wb_returns_amount': 0.0,
     'fines_amount': 0.0, 'withholdings_amount': 0.0,
@@ -724,6 +735,90 @@ def upload_page(request):
 def upload_file(request):
     if request.method != 'POST':
         return HttpResponseBadRequest('Только POST-запрос принимается на этот URL.')
+
+    mode = request.POST.get('mode', 'single')
+
+    if mode == 'multi':
+        main_file = request.FILES.get('main_report')
+        extra_file = request.FILES.get('additional_report')
+        usn_file = request.FILES.get('usn_file')
+        pdf_file = request.FILES.get('pdf_file')
+
+        if not all([main_file, extra_file, usn_file, pdf_file]):
+            return JsonResponse({
+                'error': 'Для расширенного режима нужно загрузить 4 файла: основной, дополнительный, УСН и PDF.'
+            }, status=400)
+
+        warnings: list[str] = []
+        try:
+            # File 1: standard processing.
+            result_main = process_report(main_file, mode=1, prepare_df=_prepare_df, build_result=_build_result)
+
+            # File 2: same processing but without USN + wb sales/returns metrics.
+            result_extra = process_report(extra_file, mode=2, prepare_df=_prepare_df, build_result=_build_result)
+
+            merged = merge_reports(result_main, result_extra)
+
+            # УСН после Excel 1+2: в commission только файл 1 (файл 2 обнуляет commission до merge).
+            usn_after_excel_1_and_2 = total_partner_usn(merged)
+
+            # Файл 3: 7% от «Сумма выкупа» по партнёру — прибавляется к УСН (commission) каждого партнёра.
+            usn_adjustments = parse_usn_file(usn_file, read_excel_fast=_read_excel_fast)
+            apply_usn_adjustments(merged, usn_adjustments)
+            sync_partner_usn_alias(merged)
+
+            usn_total = total_partner_usn(merged)
+            usn_from_file3 = sum_file3_usn(usn_adjustments)
+
+            # File 4: PDF checks and extra rows.
+            pdf_data = parse_pdf_file(pdf_file)
+
+            # Ожидание из PDF: 7% от итоговой строки отчёта WB (не сумма Excel 1+2+3 по отдельным базам).
+            expected_usn = None
+            if pdf_data.get('total_realized_amount') is not None:
+                expected_usn = round(float(pdf_data['total_realized_amount']) * 0.07, 2)
+
+            match = True
+            if expected_usn is not None:
+                match = abs(expected_usn - usn_total) <= 0.01
+                if not match:
+                    warnings.append(
+                        f'Проверка PDF: УСН не совпадает (ожидалось {expected_usn:.2f}, рассчитано {usn_total:.2f}).'
+                    )
+            else:
+                warnings.append('Не удалось извлечь из PDF строку "Итого стоимость реализованного товара и услуг".')
+
+            row_21 = pdf_data.get('row_2_1')
+            row_45 = pdf_data.get('row_4_5')
+            extra_rows = {
+                '2.1': row_21 if (row_21 is not None and row_21 < 0) else None,
+                '4.5': row_45 if row_45 is not None else None,
+            }
+
+            merged['warnings'] = warnings
+            merged['usn_breakdown'] = {
+                'from_excel_1_and_2': round(usn_after_excel_1_and_2, 2),
+                'from_file3_buyout': round(usn_from_file3, 2),
+                'by_partner_file3': usn_adjustments,
+                'total': round(usn_total, 2),
+                'note': 'УСН в JSON = поле commission (и дублируется как usn). Файл 2 в УСН не входит.',
+            }
+            merged['pdf_checks'] = {
+                'expected_usn': expected_usn,
+                'actual_usn': usn_total,
+                'match': match if expected_usn is not None else False,
+                'expected_usn_source': '7% от суммы строки «Итого стоимость реализованного товара и услуг» в PDF',
+                'actual_usn_source': 'сумма partners[a..d].commission после Excel 1+2 и добавки из файла 3',
+            }
+            merged['extra_rows'] = extra_rows
+            return JsonResponse(merged)
+        except ValueError as exc:
+            return JsonResponse({'error': str(exc)}, status=400)
+        except Exception as exc:
+            return JsonResponse({
+                'error': f'Ошибка при расширенной обработке файлов: {exc}',
+                'trace': traceback.format_exc(),
+            }, status=500)
 
     excel_file = request.FILES.get('file')
     if not excel_file:

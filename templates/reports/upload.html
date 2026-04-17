@@ -76,6 +76,54 @@
       <div id="message" class="mt-5 min-h-[2rem] text-sm text-slate-600"></div>
     </div>
 
+    <!-- MODE SWITCH -->
+    <div class="mb-6 rounded-3xl bg-white p-4 shadow-lg border border-slate-200">
+      <div class="flex flex-wrap items-center gap-4">
+        <span class="text-sm font-semibold text-slate-700">Режим загрузки:</span>
+        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+          <input id="modeSingle" type="radio" name="uploadMode" value="single" checked class="h-4 w-4 text-indigo-600 border-slate-300 focus:ring-indigo-500" />
+          Один файл
+        </label>
+        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+          <input id="modeMulti" type="radio" name="uploadMode" value="multi" class="h-4 w-4 text-indigo-600 border-slate-300 focus:ring-indigo-500" />
+          Мульти-загрузка (4 файла)
+        </label>
+      </div>
+    </div>
+
+    <!-- ADVANCED MULTI UPLOAD -->
+    <div id="multiUploadCard" class="mb-8 hidden rounded-3xl bg-white p-6 shadow-lg border border-slate-200">
+      <div>
+        <h2 class="text-xl font-semibold">Расширенная загрузка</h2>
+        <p class="text-slate-500 mt-1">4 файла: основной, дополнительный, УСН и PDF</p>
+      </div>
+
+      <div class="mt-6 grid gap-4 md:grid-cols-2">
+        <label class="block">
+          <span class="text-sm font-semibold text-slate-700">Основной отчет</span>
+          <input id="mainReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
+        </label>
+        <label class="block">
+          <span class="text-sm font-semibold text-slate-700">Дополнительный отчет</span>
+          <input id="additionalReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
+        </label>
+        <label class="block">
+          <span class="text-sm font-semibold text-slate-700">УСН файл</span>
+          <input id="usnReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
+        </label>
+        <label class="block">
+          <span class="text-sm font-semibold text-slate-700">PDF файл</span>
+          <input id="pdfReportInput" type="file" accept=".pdf" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
+        </label>
+      </div>
+
+      <div class="mt-5">
+        <button id="multiUploadButton" class="inline-flex min-w-[14rem] items-center justify-center rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
+          Рассчитать (расширенный режим)
+        </button>
+      </div>
+    </div>
+
     <!-- RESULTS -->
     <div id="results" class="grid gap-6"></div>
 
@@ -161,6 +209,14 @@
     const reportNameWrapper = document.getElementById('reportNameWrapper');
     const reportNameInput = document.getElementById('reportNameInput');
     const fileInput = document.getElementById('fileInput');
+    const modeSingle = document.getElementById('modeSingle');
+    const modeMulti = document.getElementById('modeMulti');
+    const multiUploadCard = document.getElementById('multiUploadCard');
+    const multiUploadButton = document.getElementById('multiUploadButton');
+    const mainReportInput = document.getElementById('mainReportInput');
+    const additionalReportInput = document.getElementById('additionalReportInput');
+    const usnReportInput = document.getElementById('usnReportInput');
+    const pdfReportInput = document.getElementById('pdfReportInput');
     const resultsNode = document.getElementById('results');
     const messageNode = document.getElementById('message');
     const dropzone = document.getElementById('dropzone');
@@ -198,6 +254,12 @@
       dropText.textContent = 'Файл выбран';
     }
 
+    function partnerUsn(stats) {
+      if (!stats) return 0;
+      const v = stats.usn != null ? stats.usn : stats.commission;
+      return Number(v || 0);
+    }
+
     function stat(title, value) {
       const displayTitle = title === 'Комиссия' ? 'УСН' : title;
       return `
@@ -209,10 +271,12 @@
     }
 
     function renderOverallSummary(data) {
+      const partners = data.partners || {};
+      const usnFromPartners = Object.values(partners).reduce((sum, stats) => sum + partnerUsn(stats), 0);
       const overall = {
         storage_amount: data.overall_storage_amount || 0,
         receiving_amount: data.overall_receiving_amount || 0,
-        usn_amount: Object.values(data.partners || {}).reduce((sum, stats) => sum + Number(stats.commission || 0), 0),
+        usn_amount: data.usn_breakdown && data.usn_breakdown.total != null ? data.usn_breakdown.total : usnFromPartners,
       };
 
       const section = document.createElement('section');
@@ -266,11 +330,12 @@
     }
 
     function renderPartnerCard(partner, stats, partnerCosts) {
+      const usn = partnerUsn(stats);
       const profit =
         (stats.sales_amount || 0)
         - (stats.returns_amount || 0)
         - (stats.delivery_amount || 0)
-        - (stats.commission || 0)
+        - usn
         - (stats.fines_amount || 0)
         - (stats.withholdings_amount || 0)
         - (partnerCosts.sales || 0)
@@ -295,7 +360,7 @@
         <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           ${stat('Продажи', stats.sales_amount)}
           ${stat('Возвраты', stats.returns_amount)}
-          ${stat('УСН', stats.commission)}
+          ${stat('УСН', usn)}
           ${stat('Итог WB', stats.total_amount)}
           ${stat('Доставка', stats.delivery_amount)}
           ${stat('WB реализовал (Пр)', stats.wb_realized_amount)}
@@ -312,6 +377,7 @@
       resultsNode.innerHTML = '';
       resultsNode.appendChild(renderOverallSummary(data));
       resultsNode.appendChild(renderProductCosts(data));
+      renderAdvancedMeta(data);
       renderDetailsSection(data);
 
       const partners = data.partners || {};
@@ -320,6 +386,67 @@
         const partnerCosts = data.partner_costs ? (data.partner_costs[partner] || {}) : {};
         resultsNode.appendChild(renderPartnerCard(partner, stats, partnerCosts));
       }
+    }
+
+    function renderAdvancedMeta(data) {
+      if (!data) return;
+      const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+      const checks = data.pdf_checks || null;
+      const rows = data.extra_rows || null;
+      const ub = data.usn_breakdown || null;
+      if (!warnings.length && !checks && !rows && !ub) return;
+
+      const section = document.createElement('section');
+      section.className = 'rounded-3xl border border-slate-200 bg-white p-6 shadow-lg';
+
+      const warningHtml = warnings.length
+        ? `<div class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+             <p class="font-semibold text-amber-700">Предупреждения</p>
+             <ul class="mt-2 text-sm text-slate-700">${warnings.map(w => `<li>• ${w}</li>`).join('')}</ul>
+           </div>`
+        : '';
+
+      const checksHtml = checks
+        ? `<div class="rounded-2xl border border-slate-200 p-4">
+             <p class="font-semibold text-slate-800">Проверка PDF</p>
+             <p class="mt-2 text-sm text-slate-700">Ожидаемая УСН: ${checks.expected_usn == null ? '—' : formatMoney(checks.expected_usn)}</p>
+             <p class="mt-1 text-sm text-slate-700">Рассчитанная УСН: ${formatMoney(checks.actual_usn || 0)}</p>
+             <p class="mt-1 text-sm font-semibold ${checks.match ? 'text-emerald-600' : 'text-rose-600'}">
+               Совпадение: ${checks.match ? 'Да' : 'Нет'}
+             </p>
+             ${checks.expected_usn_source ? `<p class="mt-2 text-xs text-slate-500">${checks.expected_usn_source}</p>` : ''}
+             ${checks.actual_usn_source ? `<p class="mt-1 text-xs text-slate-500">${checks.actual_usn_source}</p>` : ''}
+           </div>`
+        : '';
+
+      const ubHtml = ub
+        ? `<div class="rounded-2xl border border-slate-200 p-4">
+             <p class="font-semibold text-slate-800">Разбивка УСН</p>
+             <p class="mt-2 text-sm text-slate-700">После отчётов Excel 1+2: ${formatMoney(ub.from_excel_1_and_2)}</p>
+             <p class="mt-1 text-sm text-slate-700">Из файла 3 (выкуп × 7%): ${formatMoney(ub.from_file3_buyout)}</p>
+             <p class="mt-1 text-sm font-semibold text-slate-900">Итого УСН: ${formatMoney(ub.total)}</p>
+             ${ub.note ? `<p class="mt-2 text-xs text-slate-500">${ub.note}</p>` : ''}
+           </div>`
+        : '';
+
+      const row21 = rows && rows['2.1'] != null ? `<p class="text-sm text-slate-700">2.1: ${formatMoney(rows['2.1'])}</p>` : '';
+      const row45 = rows && rows['4.5'] != null ? `<p class="text-sm text-slate-700">4.5: ${formatMoney(rows['4.5'])}</p>` : '';
+      const rowsHtml = (row21 || row45)
+        ? `<div class="rounded-2xl border border-slate-200 p-4">
+             <p class="font-semibold text-slate-800">Дополнительные строки PDF</p>
+             <div class="mt-2 space-y-1">${row21}${row45}</div>
+           </div>`
+        : '';
+
+      section.innerHTML = `
+        <div class="grid gap-4">
+          ${warningHtml}
+          ${ubHtml}
+          ${checksHtml}
+          ${rowsHtml}
+        </div>
+      `;
+      resultsNode.appendChild(section);
     }
 
     function renderDetailsSection(data) {
@@ -520,6 +647,10 @@
     });
 
     uploadButton.addEventListener('click', async () => {
+      if (modeMulti.checked) {
+        showMessage('Для мульти-режима используйте кнопку "Рассчитать (расширенный режим)".', 'error');
+        return;
+      }
       const file = fileInput.files[0];
       if (!file) {
         showMessage('Выберите Excel-файл перед отправкой.', 'error');
@@ -529,6 +660,7 @@
       showMessage('Идёт загрузка и обработка файла...', 'info');
 
       const formData = new FormData();
+      formData.append('mode', 'single');
       formData.append('file', file);
 
       try {
@@ -558,6 +690,48 @@
         }
         saveButton.disabled = false;
         showMessage('Файл успешно обработан.', 'info');
+      } catch (error) {
+        console.error(error);
+        showMessage('Ошибка сети или сервера. Повторите попытку.', 'error');
+      }
+    });
+
+    multiUploadButton.addEventListener('click', async () => {
+      if (!modeMulti.checked) {
+        showMessage('Включите режим "Мульти-загрузка (4 файла)".', 'error');
+        return;
+      }
+      if (!mainReportInput.files[0] || !additionalReportInput.files[0] || !usnReportInput.files[0] || !pdfReportInput.files[0]) {
+        showMessage('Загрузите все 4 файла для расширенного режима.', 'error');
+        return;
+      }
+
+      showMessage('Идёт расширенная обработка 4 файлов...', 'info');
+      const formData = new FormData();
+      formData.append('mode', 'multi');
+      formData.append('main_report', mainReportInput.files[0]);
+      formData.append('additional_report', additionalReportInput.files[0]);
+      formData.append('usn_file', usnReportInput.files[0]);
+      formData.append('pdf_file', pdfReportInput.files[0]);
+
+      try {
+        const response = await fetch('/upload/', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          console.error(data.trace || data.error);
+          showMessage(data.error || 'Ошибка при расширенной загрузке.', 'error');
+          return;
+        }
+
+        renderResults(data);
+        renderDetailsSection(data);
+        lastReportResult = data;
+        saveButton.disabled = false;
+        showMessage('Расширенная обработка завершена.', (data.warnings || []).length ? 'error' : 'info');
       } catch (error) {
         console.error(error);
         showMessage('Ошибка сети или сервера. Повторите попытку.', 'error');
@@ -658,6 +832,18 @@
     function setSelectedFile(file) {
       updateFileUI(file);
     }
+
+    function syncModeUI() {
+      if (modeMulti.checked) {
+        multiUploadCard.classList.remove('hidden');
+      } else {
+        multiUploadCard.classList.add('hidden');
+      }
+    }
+
+    modeSingle.addEventListener('change', syncModeUI);
+    modeMulti.addEventListener('change', syncModeUI);
+    syncModeUI();
   </script>
 </body>
 </html>

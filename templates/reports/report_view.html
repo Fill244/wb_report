@@ -117,6 +117,12 @@
       return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(num);
     };
 
+    function partnerUsn(stats) {
+      if (!stats) return 0;
+      const v = stats.usn != null ? stats.usn : stats.commission;
+      return Number(v || 0);
+    }
+
     function stat(title, value) {
       const displayTitle = title === 'Комиссия' ? 'УСН' : title;
       return `
@@ -128,10 +134,12 @@
     }
 
     function renderOverallSummary(data) {
+      const partners = data.partners || {};
+      const usnFromPartners = Object.values(partners).reduce((sum, stats) => sum + partnerUsn(stats), 0);
       const overall = {
         storage_amount: data.overall_storage_amount || 0,
         receiving_amount: data.overall_receiving_amount || 0,
-        usn_amount: Object.values(data.partners || {}).reduce((sum, stats) => sum + Number(stats.commission || 0), 0),
+        usn_amount: data.usn_breakdown && data.usn_breakdown.total != null ? data.usn_breakdown.total : usnFromPartners,
       };
 
       const section = document.createElement('section');
@@ -185,11 +193,12 @@
     }
 
     function renderPartnerCard(partner, stats, partnerCosts) {
+      const usn = partnerUsn(stats);
       const profit =
         (stats.sales_amount || 0)
         - (stats.returns_amount || 0)
         - (stats.delivery_amount || 0)
-        - (stats.commission || 0)
+        - usn
         - (stats.fines_amount || 0)
         - (stats.withholdings_amount || 0)
         - (partnerCosts.sales || 0)
@@ -214,7 +223,7 @@
         <div class="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           ${stat('Продажи', stats.sales_amount)}
           ${stat('Возвраты', stats.returns_amount)}
-          ${stat('УСН', stats.commission)}
+          ${stat('УСН', usn)}
           ${stat('Итог WB', stats.total_amount)}
           ${stat('Доставка', stats.delivery_amount)}
           ${stat('WB реализовал (Пр)', stats.wb_realized_amount)}
