@@ -13,5 +13,6 @@ urlpatterns = [
     path('products/import/', views.import_products_excel, name='import_products_excel'),
     path('products/<int:pk>/edit/', views.product_edit, name='product_edit'),
     path('products/<int:pk>/view/', views.product_view, name='product_view'),
+    path('products/<int:pk>/bulk-update-costs/', views.bulk_update_variant_costs, name='bulk_update_variant_costs'),
     path('products/<int:pk>/delete/', views.delete_product, name='delete_product'),
 ]

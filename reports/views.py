@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from django.core.cache import cache
+from django.db.models import Count, Min, Prefetch
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -510,7 +511,17 @@ def _build_result(df: pd.DataFrame) -> dict:
 # ---------------------------------------------------------------------------
 
 def product_list(request):
-    products = Product.objects.prefetch_related('variants').order_by('sku')
+    products = (
+        Product.objects
+        .annotate(
+            size_count=Count('variants', distinct=True),
+            min_cost=Min('variants__cost'),
+        )
+        .prefetch_related(
+            Prefetch('variants', queryset=ProductVariant.objects.order_by('size', 'id'))
+        )
+        .order_by('sku')
+    )
     return render(request, 'reports/products.html', {
         'products':         products,
         'products_message': _pop_products_message(request),
@@ -565,6 +576,42 @@ def delete_product(request, pk):
         return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
     get_object_or_404(Product, pk=pk).delete()
     _COST_MAP_CACHE.clear()   # invalidate cost cache after product deletion
+    return redirect('product_list')
+
+
+def bulk_update_variant_costs(request, pk):
+    if request.method != 'POST':
+        return HttpResponseBadRequest('Только POST-запрос принимается на этом URL.')
+
+    product = get_object_or_404(Product, pk=pk)
+    variant_ids = request.POST.getlist('variant_ids')
+    raw_cost = (request.POST.get('cost') or '').strip().replace(',', '.')
+
+    if not variant_ids:
+        _set_products_message(request, 'Выберите хотя бы один размер для изменения.', 'error')
+        return redirect('product_list')
+
+    if not raw_cost:
+        _set_products_message(request, 'Укажите новую себестоимость.', 'error')
+        return redirect('product_list')
+
+    try:
+        cost = Decimal(raw_cost)
+    except (InvalidOperation, TypeError):
+        _set_products_message(request, 'Себестоимость должна быть числом.', 'error')
+        return redirect('product_list')
+
+    variants = list(ProductVariant.objects.filter(product=product, id__in=variant_ids))
+    if not variants:
+        _set_products_message(request, 'Не удалось найти выбранные размеры для обновления.', 'error')
+        return redirect('product_list')
+
+    for variant in variants:
+        variant.cost = cost
+
+    ProductVariant.objects.bulk_update(variants, ['cost'])
+    _COST_MAP_CACHE.clear()
+    _set_products_message(request, f'Себестоимость обновлена для размеров: {len(variants)}.', 'success')
     return redirect('product_list')
 
 
