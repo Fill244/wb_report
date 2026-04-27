@@ -800,6 +800,7 @@ def upload_file(request):
         try:
             # File 1: standard processing.
             result_main = process_report(main_file, mode=1, prepare_df=_prepare_df, build_result=_build_result)
+            main_report_usn = total_partner_usn(result_main)
 
             # File 2: same processing but without USN + wb sales/returns metrics.
             result_extra = process_report(extra_file, mode=2, prepare_df=_prepare_df, build_result=_build_result)
@@ -827,10 +828,10 @@ def upload_file(request):
 
             match = True
             if expected_usn is not None:
-                match = abs(expected_usn - usn_total) <= 0.01
+                match = abs(expected_usn - main_report_usn) <= 0.01
                 if not match:
                     warnings.append(
-                        f'Проверка PDF: УСН не совпадает (ожидалось {expected_usn:.2f}, рассчитано {usn_total:.2f}).'
+                        f'Проверка PDF: УСН не совпадает (ожидалось {expected_usn:.2f}, в основном отчёте {main_report_usn:.2f}).'
                     )
             else:
                 warnings.append('Не удалось извлечь из PDF строку "Итого стоимость реализованного товара и услуг".')
@@ -843,6 +844,20 @@ def upload_file(request):
             }
 
             merged['warnings'] = warnings
+            partner_profit_total = round(sum(
+                float(((merged.get('partners') or {}).get(p) or {}).get('sales_amount', 0.0))
+                - float(((merged.get('partners') or {}).get(p) or {}).get('returns_amount', 0.0))
+                - float(((merged.get('partners') or {}).get(p) or {}).get('delivery_amount', 0.0))
+                - float(((merged.get('partners') or {}).get(p) or {}).get('commission', 0.0))
+                - float(((merged.get('partners') or {}).get(p) or {}).get('fines_amount', 0.0))
+                - float(((merged.get('partners') or {}).get(p) or {}).get('withholdings_amount', 0.0))
+                - float(((merged.get('partner_costs') or {}).get(p) or {}).get('sales', 0.0))
+                for p in _PARTNERS
+            ), 2)
+            merged['overall_card_amount'] = round(
+                float(merged.get('product_cost_sales', 0.0)) + partner_profit_total + usn_total,
+                2,
+            )
             merged['usn_breakdown'] = {
                 'from_excel_1_and_2': round(usn_after_excel_1_and_2, 2),
                 'from_file3_buyout': round(usn_from_file3, 2),
@@ -852,10 +867,10 @@ def upload_file(request):
             }
             merged['pdf_checks'] = {
                 'expected_usn': expected_usn,
-                'actual_usn': usn_total,
+                'actual_usn': round(main_report_usn, 2),
                 'match': match if expected_usn is not None else False,
                 'expected_usn_source': '7% от суммы строки «Итого стоимость реализованного товара и услуг» в PDF',
-                'actual_usn_source': 'сумма partners[a..d].commission после Excel 1+2 и добавки из файла 3',
+                'actual_usn_source': 'сумма УСН по партнёрам только из основного отчёта',
             }
             merged['extra_rows'] = extra_rows
             return JsonResponse(merged)

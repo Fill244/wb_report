@@ -277,6 +277,7 @@
         storage_amount: data.overall_storage_amount || 0,
         receiving_amount: data.overall_receiving_amount || 0,
         usn_amount: data.usn_breakdown && data.usn_breakdown.total != null ? data.usn_breakdown.total : usnFromPartners,
+        card_amount: data.overall_card_amount,
       };
 
       const section = document.createElement('section');
@@ -298,6 +299,11 @@
         statsGrid.classList.remove('md:grid-cols-2');
         statsGrid.classList.add('md:grid-cols-3');
         statsGrid.insertAdjacentHTML('beforeend', stat('УСН (всего)', overall.usn_amount));
+        if (overall.card_amount != null) {
+          statsGrid.classList.remove('md:grid-cols-3');
+          statsGrid.classList.add('md:grid-cols-4');
+          statsGrid.insertAdjacentHTML('beforeend', stat('На карту', overall.card_amount));
+        }
       }
       return section;
     }
@@ -339,6 +345,14 @@
         - (stats.fines_amount || 0)
         - (stats.withholdings_amount || 0)
         - (partnerCosts.sales || 0);
+      const handToMom = profit / 2;
+      const handToPartner = profit / 2 + ((partnerCosts.sales || 0) - (partnerCosts.returns || 0));
+      const extraHandStats = ['c', 'd'].includes(partner)
+        ? `
+          ${stat('На руки маме', handToMom)}
+          ${stat('На руки партнеру', handToPartner)}
+        `
+        : '';
 
       const profitClass = profit >= 0 ? 'text-emerald-600' : 'text-rose-600';
 
@@ -367,6 +381,7 @@
           ${stat('Удержания', stats.withholdings_amount)}
           ${stat('Себестоимость продаж', partnerCosts.sales)}
           ${stat('Себестоимость возвратов', partnerCosts.returns)}
+          ${extraHandStats}
         </div>
       `;
       return card;
