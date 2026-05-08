@@ -15,6 +15,7 @@
       </div>
       <div class="flex flex-wrap gap-3">
         <a href="/" class="rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm text-slate-900 transition hover:border-indigo-500 hover:text-indigo-700">Назад к загрузке</a>
+        <a href="/products/export/" class="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100">Экспорт в Excel</a>
         <a href="/products/add/" class="rounded-2xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">Добавить товар</a>
       </div>
     </div>
@@ -46,14 +47,30 @@
       <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h2 class="text-xl font-semibold text-slate-900">Импорт товаров из Excel</h2>
-          <p class="mt-2 text-slate-600">Обрабатываются только три столбца: Артикул продавца, Размер и Цена. Остальные столбцы не читаются и не участвуют в обработке.</p>
+          <p id="importModeDescription" class="mt-2 text-slate-600">Обрабатываются только три столбца: Артикул продавца, Размер и Цена. Остальные столбцы не читаются и не участвуют в обработке.</p>
         </div>
+      </div>
+
+      <div class="mt-6 flex flex-wrap gap-2">
+        <label class="cursor-pointer">
+          <input id="importModeWb" type="radio" name="productImportMode" value="wb" checked class="peer sr-only" />
+          <span class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition peer-checked:border-slate-900 peer-checked:bg-slate-900 peer-checked:text-white hover:border-slate-400">
+            Загрузка из WB
+          </span>
+        </label>
+        <label class="cursor-pointer">
+          <input id="importModeOwn" type="radio" name="productImportMode" value="own" class="peer sr-only" />
+          <span class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition peer-checked:border-slate-900 peer-checked:bg-slate-900 peer-checked:text-white hover:border-slate-400">
+            Свой файл
+          </span>
+        </label>
       </div>
 
       <form method="post" action="/products/import/" enctype="multipart/form-data" class="mt-6 flex flex-col gap-4 lg:flex-row lg:items-end">
         {% csrf_token %}
+        <input id="productImportModeInput" type="hidden" name="import_mode" value="wb" />
         <label class="block flex-1">
-          <span class="mb-2 block text-sm font-medium text-slate-700">Excel-файл</span>
+          <span id="productImportFileLabel" class="mb-2 block text-sm font-medium text-slate-700">Excel-файл Wildberries</span>
           <input
             type="file"
             name="file"
@@ -235,6 +252,36 @@
       {% endif %}
     </div>
   </div>
+
+  <script>
+    const importModeWb = document.getElementById('importModeWb');
+    const importModeOwn = document.getElementById('importModeOwn');
+    const productImportModeInput = document.getElementById('productImportModeInput');
+    const productImportFileLabel = document.getElementById('productImportFileLabel');
+    const importModeDescription = document.getElementById('importModeDescription');
+
+    function syncProductImportMode() {
+      if (!importModeWb || !importModeOwn || !productImportModeInput || !productImportFileLabel || !importModeDescription) {
+        return;
+      }
+
+      if (importModeOwn.checked) {
+        productImportModeInput.value = 'own';
+        productImportFileLabel.textContent = 'Свой Excel-файл';
+        importModeDescription.textContent = 'Загрузите свой файл, который был экспортирован из системы и затем изменён. Используются те же три столбца: Артикул продавца, размер и Цена.';
+      } else {
+        productImportModeInput.value = 'wb';
+        productImportFileLabel.textContent = 'Excel-файл Wildberries';
+        importModeDescription.textContent = 'Обрабатываются только три столбца: Артикул продавца, Размер и Цена. Остальные столбцы не читаются и не участвуют в обработке.';
+      }
+    }
+
+    if (importModeWb && importModeOwn) {
+      importModeWb.addEventListener('change', syncProductImportMode);
+      importModeOwn.addEventListener('change', syncProductImportMode);
+      syncProductImportMode();
+    }
+  </script>
 
   {% if products %}
   <script>

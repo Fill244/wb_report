@@ -35,7 +35,22 @@
         </div>
       </div>
 
-      <div class="mt-6 grid gap-4">
+      <div class="mt-6 flex flex-wrap gap-2">
+        <label class="cursor-pointer">
+          <input id="modeSingle" type="radio" name="uploadMode" value="single" checked class="peer sr-only" />
+          <span class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition peer-checked:border-slate-900 peer-checked:bg-slate-900 peer-checked:text-white hover:border-slate-400">
+            Один файл
+          </span>
+        </label>
+        <label class="cursor-pointer">
+          <input id="modeMulti" type="radio" name="uploadMode" value="multi" class="peer sr-only" />
+          <span class="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition peer-checked:border-slate-900 peer-checked:bg-slate-900 peer-checked:text-white hover:border-slate-400">
+            Мульти-загрузка
+          </span>
+        </label>
+      </div>
+
+      <div id="singleUploadSection" class="mt-6 grid gap-4">
         <div id="reportNameWrapper" class="hidden">
           <label class="block">
             <span class="text-slate-700 font-semibold">Название отчёта</span>
@@ -62,9 +77,11 @@
       </div>
 
       <div class="mt-5 flex flex-wrap gap-3">
-        <button id="uploadButton" class="inline-flex min-w-[10rem] items-center justify-center rounded-2xl bg-black px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
-          Загрузить
-        </button>
+        <div id="singleUploadActions">
+          <button id="uploadButton" class="inline-flex min-w-[10rem] items-center justify-center rounded-2xl bg-black px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            Загрузить
+          </button>
+        </div>
         <button id="clearButton" class="inline-flex min-w-[10rem] items-center justify-center rounded-2xl bg-slate-200 px-6 py-3 text-sm font-semibold text-slate-900 transition hover:bg-slate-300">
           Очистить
         </button>
@@ -74,53 +91,54 @@
       </div>
 
       <div id="message" class="mt-5 min-h-[2rem] text-sm text-slate-600"></div>
-    </div>
+      <div id="multiUploadCard" class="mt-6 hidden rounded-2xl border border-slate-200 bg-slate-50 p-5">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 class="text-lg font-semibold text-slate-900">Мульти-загрузка</h3>
+            <p class="mt-1 text-sm text-slate-500">4 файла: основной, дополнительный, УСН и PDF</p>
+          </div>
+        </div>
 
-    <!-- MODE SWITCH -->
-    <div class="mb-6 rounded-3xl bg-white p-4 shadow-lg border border-slate-200">
-      <div class="flex flex-wrap items-center gap-4">
-        <span class="text-sm font-semibold text-slate-700">Режим загрузки:</span>
-        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
-          <input id="modeSingle" type="radio" name="uploadMode" value="single" checked class="h-4 w-4 text-indigo-600 border-slate-300 focus:ring-indigo-500" />
-          Один файл
-        </label>
-        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
-          <input id="modeMulti" type="radio" name="uploadMode" value="multi" class="h-4 w-4 text-indigo-600 border-slate-300 focus:ring-indigo-500" />
-          Мульти-загрузка (4 файла)
-        </label>
-      </div>
-    </div>
+        <div class="mt-5 grid gap-4 md:grid-cols-2">
+          <label class="block">
+            <span class="text-sm font-semibold text-slate-700">Основной отчет</span>
+            <div id="mainReportDropzone" class="mt-2 group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50">
+              <p id="mainReportDropText" class="text-base font-medium text-slate-700">Перетащи файл сюда или нажми для выбора</p>
+              <p id="mainReportFileName" class="mt-2 text-sm text-slate-500">Файл не выбран</p>
+              <input id="mainReportInput" type="file" accept=".xls,.xlsx" class="hidden" />
+            </div>
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-slate-700">Дополнительный отчет</span>
+            <div id="additionalReportDropzone" class="mt-2 group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50">
+              <p id="additionalReportDropText" class="text-base font-medium text-slate-700">Перетащи файл сюда или нажми для выбора</p>
+              <p id="additionalReportFileName" class="mt-2 text-sm text-slate-500">Файл не выбран</p>
+              <input id="additionalReportInput" type="file" accept=".xls,.xlsx" class="hidden" />
+            </div>
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-slate-700">УСН файл</span>
+            <div id="usnReportDropzone" class="mt-2 group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50">
+              <p id="usnReportDropText" class="text-base font-medium text-slate-700">Перетащи файл сюда или нажми для выбора</p>
+              <p id="usnReportFileName" class="mt-2 text-sm text-slate-500">Файл не выбран</p>
+              <input id="usnReportInput" type="file" accept=".xls,.xlsx" class="hidden" />
+            </div>
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-slate-700">PDF файл</span>
+            <div id="pdfReportDropzone" class="mt-2 group cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 bg-white p-6 text-center transition hover:border-indigo-400 hover:bg-indigo-50">
+              <p id="pdfReportDropText" class="text-base font-medium text-slate-700">Перетащи файл сюда или нажми для выбора</p>
+              <p id="pdfReportFileName" class="mt-2 text-sm text-slate-500">Файл не выбран</p>
+              <input id="pdfReportInput" type="file" accept=".pdf" class="hidden" />
+            </div>
+          </label>
+        </div>
 
-    <!-- ADVANCED MULTI UPLOAD -->
-    <div id="multiUploadCard" class="mb-8 hidden rounded-3xl bg-white p-6 shadow-lg border border-slate-200">
-      <div>
-        <h2 class="text-xl font-semibold">Расширенная загрузка</h2>
-        <p class="text-slate-500 mt-1">4 файла: основной, дополнительный, УСН и PDF</p>
-      </div>
-
-      <div class="mt-6 grid gap-4 md:grid-cols-2">
-        <label class="block">
-          <span class="text-sm font-semibold text-slate-700">Основной отчет</span>
-          <input id="mainReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
-        </label>
-        <label class="block">
-          <span class="text-sm font-semibold text-slate-700">Дополнительный отчет</span>
-          <input id="additionalReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
-        </label>
-        <label class="block">
-          <span class="text-sm font-semibold text-slate-700">УСН файл</span>
-          <input id="usnReportInput" type="file" accept=".xls,.xlsx" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
-        </label>
-        <label class="block">
-          <span class="text-sm font-semibold text-slate-700">PDF файл</span>
-          <input id="pdfReportInput" type="file" accept=".pdf" class="mt-2 block w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700" />
-        </label>
-      </div>
-
-      <div class="mt-5">
-        <button id="multiUploadButton" class="inline-flex min-w-[14rem] items-center justify-center rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500">
-          Рассчитать (расширенный режим)
-        </button>
+        <div class="mt-5">
+          <button id="multiUploadButton" class="inline-flex min-w-[14rem] items-center justify-center rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-slate-800">
+            Рассчитать (расширенный режим)
+          </button>
+        </div>
       </div>
     </div>
 
@@ -208,6 +226,8 @@
     const clearButton = document.getElementById('clearButton');
     const reportNameWrapper = document.getElementById('reportNameWrapper');
     const reportNameInput = document.getElementById('reportNameInput');
+    const singleUploadSection = document.getElementById('singleUploadSection');
+    const singleUploadActions = document.getElementById('singleUploadActions');
     const fileInput = document.getElementById('fileInput');
     const modeSingle = document.getElementById('modeSingle');
     const modeMulti = document.getElementById('modeMulti');
@@ -222,6 +242,18 @@
     const dropzone = document.getElementById('dropzone');
     const dropText = document.getElementById('dropText');
     const fileNameNode = document.getElementById('fileName');
+    const mainReportDropzone = document.getElementById('mainReportDropzone');
+    const additionalReportDropzone = document.getElementById('additionalReportDropzone');
+    const usnReportDropzone = document.getElementById('usnReportDropzone');
+    const pdfReportDropzone = document.getElementById('pdfReportDropzone');
+    const mainReportDropText = document.getElementById('mainReportDropText');
+    const additionalReportDropText = document.getElementById('additionalReportDropText');
+    const usnReportDropText = document.getElementById('usnReportDropText');
+    const pdfReportDropText = document.getElementById('pdfReportDropText');
+    const mainReportFileName = document.getElementById('mainReportFileName');
+    const additionalReportFileName = document.getElementById('additionalReportFileName');
+    const usnReportFileName = document.getElementById('usnReportFileName');
+    const pdfReportFileName = document.getElementById('pdfReportFileName');
 
     let lastReportResult = null;
     let originalDetails = [];
@@ -252,6 +284,52 @@
       }
       fileNameNode.textContent = file.name;
       dropText.textContent = 'Файл выбран';
+    }
+
+    function updateDropzoneUI(file, fileNameEl, dropTextEl) {
+      if (!file) {
+        fileNameEl.textContent = 'Файл не выбран';
+        dropTextEl.textContent = 'Перетащи файл сюда или нажми для выбора';
+        return;
+      }
+      fileNameEl.textContent = file.name;
+      dropTextEl.textContent = 'Файл выбран';
+    }
+
+    function bindFileDropzone(dropzoneEl, inputEl, fileNameEl, dropTextEl) {
+      if (!dropzoneEl || !inputEl || !fileNameEl || !dropTextEl) return;
+
+      updateDropzoneUI(null, fileNameEl, dropTextEl);
+
+      dropzoneEl.addEventListener('click', () => inputEl.click());
+
+      inputEl.addEventListener('change', () => {
+        updateDropzoneUI(inputEl.files[0], fileNameEl, dropTextEl);
+      });
+
+      dropzoneEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzoneEl.classList.add('bg-indigo-50', 'border-indigo-400');
+      });
+
+      dropzoneEl.addEventListener('dragleave', () => {
+        dropzoneEl.classList.remove('bg-indigo-50', 'border-indigo-400');
+      });
+
+      dropzoneEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzoneEl.classList.remove('bg-indigo-50', 'border-indigo-400');
+
+        const files = e.dataTransfer.files;
+        if (files && files.length) {
+          try {
+            inputEl.files = files;
+          } catch (err) {
+            // some browsers may block direct assignment
+          }
+          updateDropzoneUI(files[0], fileNameEl, dropTextEl);
+        }
+      });
     }
 
     function partnerUsn(stats) {
@@ -629,6 +707,10 @@
     }
 
     updateFileUI(null);
+    bindFileDropzone(mainReportDropzone, mainReportInput, mainReportFileName, mainReportDropText);
+    bindFileDropzone(additionalReportDropzone, additionalReportInput, additionalReportFileName, additionalReportDropText);
+    bindFileDropzone(usnReportDropzone, usnReportInput, usnReportFileName, usnReportDropText);
+    bindFileDropzone(pdfReportDropzone, pdfReportInput, pdfReportFileName, pdfReportDropText);
 
     dropzone.addEventListener('click', () => fileInput.click());
 
@@ -816,6 +898,14 @@
       reportNameInput.value = '';
       fileInput.value = '';
       updateFileUI(null);
+      mainReportInput.value = '';
+      additionalReportInput.value = '';
+      usnReportInput.value = '';
+      pdfReportInput.value = '';
+      updateDropzoneUI(null, mainReportFileName, mainReportDropText);
+      updateDropzoneUI(null, additionalReportFileName, additionalReportDropText);
+      updateDropzoneUI(null, usnReportFileName, usnReportDropText);
+      updateDropzoneUI(null, pdfReportFileName, pdfReportDropText);
       saveButton.disabled = true;
       try {
         localStorage.removeItem('wbReportData');
@@ -849,8 +939,12 @@
 
     function syncModeUI() {
       if (modeMulti.checked) {
+        singleUploadSection.classList.add('hidden');
+        singleUploadActions.classList.add('hidden');
         multiUploadCard.classList.remove('hidden');
       } else {
+        singleUploadSection.classList.remove('hidden');
+        singleUploadActions.classList.remove('hidden');
         multiUploadCard.classList.add('hidden');
       }
     }

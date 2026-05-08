@@ -19,6 +19,7 @@ import json
 import re
 import traceback
 import hashlib
+from io import BytesIO
 from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 
@@ -27,7 +28,7 @@ import pandas as pd
 
 from django.core.cache import cache
 from django.db.models import Count, Min, Prefetch
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 
@@ -550,6 +551,43 @@ def product_list(request):
     })
 
 
+def export_products_excel(request):
+    rows: list[dict[str, object]] = []
+    products = Product.objects.prefetch_related(
+        Prefetch('variants', queryset=ProductVariant.objects.order_by('size', 'id'))
+    ).order_by('sku')
+
+    for product in products:
+        variants = list(product.variants.all())
+        if not variants:
+            rows.append({
+                'Артикул продавца': product.sku,
+                'размер': '',
+                'Цена': '',
+            })
+            continue
+
+        for variant in variants:
+            rows.append({
+                'Артикул продавца': product.sku,
+                'размер': variant.size or '',
+                'Цена': float(variant.cost),
+            })
+
+    df = pd.DataFrame(rows, columns=['Артикул продавца', 'размер', 'Цена'])
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Товары')
+
+    output.seek(0)
+    response = HttpResponse(
+        output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = 'attachment; filename="products_export.xlsx"'
+    return response
+
+
 def product_add(request):
     if request.method == 'POST':
         form    = ProductForm(request.POST)
@@ -876,8 +914,15 @@ def upload_file(request):
                 - float(((merged.get('partner_costs') or {}).get(p) or {}).get('sales', 0.0))
                 for p in _PARTNERS
             ), 2)
+            overall_withholdings_amount = round(sum(
+                float(((merged.get('partners') or {}).get(p) or {}).get('withholdings_amount', 0.0))
+                for p in _PARTNERS
+            ), 2)
             merged['overall_card_amount'] = round(
-                float(merged.get('product_cost_sales', 0.0)) + partner_profit_total + usn_total,
+                float(merged.get('product_cost_sales', 0.0))
+                + partner_profit_total
+                + usn_total
+                - overall_withholdings_amount,
                 2,
             )
             merged['usn_breakdown'] = {
