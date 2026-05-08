@@ -88,6 +88,8 @@ _REPORT_KEYWORD_GROUPS: list[list[str]] = [
     ['удерж'],
 ]
 
+_MISSING_PRODUCTS_SKIP_REASON_RAW = 'Возмещение издержек по перевозке/по складским операциям с товаром'
+
 # Process-level cost-map cache: invalidated when any ProductVariant changes.
 # Keyed by the DB rowcount of ProductVariant so stale data is never used.
 _COST_MAP_CACHE: dict = {}   # {'count': int, 'exact': dict, 'fallback': dict}
@@ -195,14 +197,18 @@ def _prepare_df(file) -> pd.DataFrame:
         for grp in _REPORT_KEYWORD_GROUPS
     ]
 
+    eleventh_col = header_df.columns[10] if len(header_df.columns) > 10 else None
     matched = [
-        col for col in header_df.columns
-        if any(_matches_keywords(_normalize_name(col), grp) for grp in norm_groups)
+        col for idx, col in enumerate(header_df.columns)
+        if idx == 10 or any(_matches_keywords(_normalize_name(col), grp) for grp in norm_groups)
     ]
 
     # --- pass 2: full data, filtered columns only ----------------------------
     df = _read_excel_fast(file, usecols=matched if matched else None)
-    return _normalize_column_names(df)
+    df = _normalize_column_names(df)
+    if eleventh_col is not None:
+        df.attrs['source_col_k'] = _normalize_name(eleventh_col)
+    return df
 
 
 def _find_product_import_header_row(probe_df: pd.DataFrame) -> int:
@@ -286,6 +292,7 @@ def _vectorised_cost_lookup(
     size_lower: pd.Series,
     sku_display: pd.Series,
     size_display: pd.Series,
+    skip_missing_mask: np.ndarray,
     exact_cost: dict,
     fallback_cost: dict,
 ) -> tuple[np.ndarray, set[str]]:
@@ -297,6 +304,7 @@ def _vectorised_cost_lookup(
     sz_l  = size_lower.tolist()
     sv_l  = sku_display.tolist()
     szv_l = size_display.tolist()
+    skip_l = skip_missing_mask.tolist()
     ec    = exact_cost
     fb    = fallback_cost
 
@@ -308,6 +316,8 @@ def _vectorised_cost_lookup(
         if c is None:
             c = fb.get(sk)
         if c is None:
+            if skip_l[i]:
+                continue
             szv = szv_l[i]
             missing.add(f'{sv_l[i]}{" / " + szv if szv else ""}')
         else:
@@ -321,6 +331,7 @@ def _vectorised_cost_lookup(
 # ---------------------------------------------------------------------------
 
 def _build_result(df: pd.DataFrame) -> dict:
+    source_col_k = df.attrs.get('source_col_k')
     # --- column discovery ---------------------------------------------------
     supplier_col  = _find_column(df, ['артикул', 'поставщика'])
     partner_col   = _find_column(df, ['партнер'])
@@ -389,9 +400,20 @@ def _build_result(df: pd.DataFrame) -> dict:
     exact_cost, fallback_cost = _build_cost_maps()
     sku_lower  = df['sku'].str.lower()
     size_lower = df['size'].str.lower()
+    if source_col_k and source_col_k in df.columns:
+        skip_missing_mask = (
+            df[source_col_k]
+            .fillna('')
+            .astype(str)
+            .map(_normalize_name)
+            .eq(_normalize_name(_MISSING_PRODUCTS_SKIP_REASON_RAW))
+            .to_numpy()
+        )
+    else:
+        skip_missing_mask = np.zeros(len(df), dtype=bool)
 
     cost_base, missing_products = _vectorised_cost_lookup(
-        sku_lower, size_lower, df['sku'], df['size'], exact_cost, fallback_cost,
+        sku_lower, size_lower, df['sku'], df['size'], skip_missing_mask, exact_cost, fallback_cost,
     )
 
     qty_arr          = df['quantity'].to_numpy(dtype=np.float64)
